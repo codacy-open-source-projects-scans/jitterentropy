@@ -9,15 +9,15 @@ To obtain raw noise data from the Jitter RNG, follow these steps:
    select `CONFIG_CRYPTO_JITTERENTROPY_TESTINTERFACE`, compile, install and
    reboot the kernel - if you want to stimulate the generation of entropy
    with the command below, ensure the kernel option
-   `CONFIG_CRYPTO_USER_API_RNG`
+   `CONFIG_CRYPTO_USER_API_RNG` is set to `m` or `y`.
 
 2. Compile getrawentropy.c as documented in that file
 
 3. Execute as root to obtain the raw entropy data:
-	`getrawentropy -f /sys/kernel/debug/jitterentropy_rng/jent_raw_hires -s 1000000 > /dev/shm/lrng_raw_noise.data`
+	`getrawentropy -f /sys/kernel/debug/jitterentropy_testing/jent_raw_hires -s 1000000 > /dev/shm/lrng_raw_noise.data`
 
 4. In parallel to step 3, stimulate the generation of entropy, e.g. by using
    the following command with a tool from libkcapi using the following command
-	`kcapi-rng -n "jitterentropy_rng" -b 2000000`
+	`kcapi-rng -n "jitterentropy_rng" -b 2000000 > /dev/null`
 
 5. Process the obtained data with validation-runtime-kernel/processdata.sh
