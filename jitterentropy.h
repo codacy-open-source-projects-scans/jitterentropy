@@ -94,6 +94,26 @@ extern "C" {
  */
 #define JENT_RANDOM_MEMACCESS
 
+/*
+ * Mask specifying the number of bits of the raw entropy data of the time delta
+ * value used for the APT.
+ *
+ * This value implies that for the APT, only the low bits specified by
+ * JENT_APT_MASK are taken as suggested by IG D.K resolution 22. The mask is
+ * applied to a time stamp where the GCD is already applied and thus no
+ * "non-moving" low-order bits are present. The smaller the mask, the more
+ * sensitive the APT becomes, i.e. it becomes more likely that the APT flags
+ * an health error as masked out higher bits that may provide entropy are
+ * ignored. Yet, it is disputed that masking the time stamp is helpful.
+ *
+ * IG D.K may suggest a mask value of 0xff as the analysis of the raw entropy
+ * data with the SP800-90B tool truncates the time delta to 8 bits.
+ *
+ * Due to the disputed nature of the mask, the default value is set such
+ * that no data is maked out.
+ */
+#define JENT_APT_MASK		(UINT64_C(0xffffffffffffffff))
+
 /***************************************************************************
  * Jitter RNG State Definition Section
  ***************************************************************************/
@@ -104,8 +124,8 @@ extern "C" {
 #include "jitterentropy-base-user.h"
 #endif
 
-#define SHA3_256_SIZE_DIGEST_BITS	256
-#define SHA3_256_SIZE_DIGEST		(SHA3_256_SIZE_DIGEST_BITS >> 3)
+#define JENT_SHA3_256_SIZE_DIGEST_BITS	256
+#define JENT_SHA3_256_SIZE_DIGEST	(JENT_SHA3_256_SIZE_DIGEST_BITS >> 3)
 
 /*
  * The output 256 bits can receive more than 256 bits of min entropy,
@@ -175,7 +195,7 @@ struct rand_data
 	 * calculate the next random value. */
 	void *hash_state;		/* SENSITIVE hash state entropy pool */
 	uint64_t prev_time;		/* SENSITIVE Previous time stamp */
-#define DATA_SIZE_BITS (SHA3_256_SIZE_DIGEST_BITS)
+#define DATA_SIZE_BITS (JENT_SHA3_256_SIZE_DIGEST_BITS)
 
 #ifndef JENT_HEALTH_LAG_PREDICTOR
 	uint64_t last_delta;		/* SENSITIVE stuck test */
