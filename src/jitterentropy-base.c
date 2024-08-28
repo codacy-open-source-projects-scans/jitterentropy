@@ -37,16 +37,6 @@
 #include "jitterentropy-timer.h"
 #include "jitterentropy-sha3.h"
 
-#define MAJVERSION 3 /* API / ABI incompatible changes, functional changes that
-		      * require consumer to be updated (as long as this number
-		      * is zero, the API is not considered stable and can
-		      * change without a bump of the major version) */
-#define MINVERSION 5 /* API compatible, ABI may change, functional
-		      * enhancements only, consumer can be left unchanged if
-		      * enhancements are not considered */
-#define PATCHLEVEL 1 /* API / ABI compatible, no functional changes, no
-		      * enhancements, bug fixes only */
-
 /***************************************************************************
  * Jitter RNG Static Definitions
  *
@@ -81,13 +71,7 @@
 JENT_PRIVATE_STATIC
 unsigned int jent_version(void)
 {
-	unsigned int version = 0;
-
-	version =  MAJVERSION * 1000000;
-	version += MINVERSION * 10000;
-	version += PATCHLEVEL * 100;
-
-	return version;
+	return JENT_VERSION;
 }
 
 /***************************************************************************
