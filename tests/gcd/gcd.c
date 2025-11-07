@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2024, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -23,19 +23,20 @@
 
 #include "jitterentropy-gcd.h"
 
-#define MAJVERSION 0   /* API / ABI incompatible changes,
-			* functional changes that require consumer
-			* to be updated (as long as this number is
-			* zero, the API is not considered stable
-			* and can change without a bump of the
-			* major version). */
-#define MINVERSION 1   /* API compatible, ABI may change,
-			* functional enhancements only, consumer
-			* can be left unchanged if enhancements are
-			* not considered. */
-#define PATCHLEVEL 0   /* API / ABI compatible, no functional
-			* changes, no enhancements, bug fixes
-			* only. */
+// Currently not used
+// #define MAJVERSION 0   /* API / ABI incompatible changes,
+// 			* functional changes that require consumer
+// 			* to be updated (as long as this number is
+// 			* zero, the API is not considered stable
+// 			* and can change without a bump of the
+// 			* major version). */
+// #define MINVERSION 1   /* API compatible, ABI may change,
+// 			* functional enhancements only, consumer
+// 			* can be left unchanged if enhancements are
+// 			* not considered. */
+// #define PATCHLEVEL 0   /* API / ABI compatible, no functional
+// 			* changes, no enhancements, bug fixes
+// 			* only. */
 
 #define ELEM 1000
 #define EXP_GCD 50ULL
@@ -45,13 +46,18 @@ int main(int argc, char *argv[])
 	uint64_t val;
 	unsigned int i;
 
+	/*
+	 * Assumed over sampling rate. Equal to the default over sampling rate.
+	 */
+	const size_t osr = JENT_MIN_OSR;
+
 	(void)argc;
 	(void)argv;
 
 	for (i = 0; i < ELEM; i++)
 		jent_gcd_add_value(gcd, i * EXP_GCD, i);
 
-	if (jent_gcd_analyze(gcd, ELEM))
+	if (jent_gcd_analyze(gcd, ELEM, osr))
 		return 1;
 
 	jent_gcd_fini(gcd, ELEM);

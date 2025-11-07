@@ -1,7 +1,7 @@
 /*
  * Non-physical true random number generator based on timing jitter.
  *
- * Copyright Stephan Mueller <smueller@chronox.de>, 2013 - 2024
+ * Copyright Stephan Mueller <smueller@chronox.de>, 2013 - 2025
  *
  * License
  * =======
@@ -51,9 +51,9 @@ static inline void jent_get_nstime(uint64_t *out)
 {
 	uint64_t clk;
 	/* this is MVS code! enable with -S in the compiler */
-	/*__asm__ volatile("stck %0" : "=m" (clk) : : "cc"); */
+	/*__asm__ __volatile__("stck %0" : "=m" (clk) : : "cc"); */
 	/* this is gcc */
-	asm volatile("stcke %0" : "=Q" (clk) : : "cc");
+	__asm__ __volatile__("stcke %0" : "=Q" (clk) : : "cc");
 	*out = (uint64_t)(clk);
 }
 

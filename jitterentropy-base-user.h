@@ -1,7 +1,7 @@
 /*
  * Non-physical true random number generator based on timing jitter.
  *
- * Copyright Stephan Mueller <smueller@chronox.de>, 2013 - 2024
+ * Copyright Stephan Mueller <smueller@chronox.de>, 2013 - 2025
  *
  * License
  * =======
@@ -113,7 +113,7 @@ static inline void jent_get_nstime(uint64_t *out)
 #ifdef __sun__
 	__asm("rdtsc" : EAX_EDX_RET(val, low, high));
 #else
-	asm volatile("rdtsc" : EAX_EDX_RET(val, low, high));
+	__asm__ __volatile__("rdtsc" : EAX_EDX_RET(val, low, high));
 #endif
 	*out = EAX_EDX_VAL(val, low, high);
 }
@@ -127,10 +127,21 @@ static inline void jent_get_nstime(uint64_t *out)
 static inline void jent_get_nstime(uint64_t *out)
 {
         uint64_t ctr_val;
+#if !defined(__MACH__)
         /*
-         * Use the system counter for aarch64 (64 bit ARM).
+         * Use the system counter for aarch64 (64 bit ARM)...
          */
-        asm volatile("mrs %0, " AARCH64_NSTIME_REGISTER : "=r" (ctr_val));
+        __asm__ __volatile__("mrs %0, " AARCH64_NSTIME_REGISTER : "=r" (ctr_val));
+#else
+        /*
+         * Except on modern Apple platforms. Especially on M1 generation Arm64
+         * CPUs, the system counter is too coarse. Instead, use
+         * clock_gettime_nsec_np(CLOCK_UPTIME_RAW), that is equivalent to
+         * march_absolute_time(), but scaled to nanoseconds. See e.g.
+         * https://www.manpagez.com/man/3/clock_gettime_nsec_np/.
+         */
+        ctr_val = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
         *out = ctr_val;
 }
 
@@ -142,7 +153,7 @@ static inline void jent_get_nstime(uint64_t *out)
 	 * This is MVS+STCK code! Enable it with -S in the compiler.
 	 *
 	 * uint64_t clk;
-	 * __asm__ volatile("stck %0" : "=m" (clk) : : "cc");
+	 * __asm__ __volatile__("stck %0" : "=m" (clk) : : "cc");
 	 * *out = (uint64_t)(clk);
 	 */
 
@@ -174,7 +185,7 @@ static inline void jent_get_nstime(uint64_t *out)
 
 	uint8_t clk[16];
 
-	asm volatile("stcke %0" : "=Q" (clk) : : "cc");
+	__asm__ __volatile__("stcke %0" : "=Q" (clk) : : "cc");
 
 	/* s390x is big-endian, so just perfom a byte-by-byte copy */
 	*out = *(uint64_t *)(clk + 1);
@@ -199,12 +210,12 @@ static inline void jent_get_nstime(uint64_t *out)
 	unsigned long newhigh;
 	uint64_t result;
 #ifdef POWER_PC_USE_NEW_INSTRUCTIONS /* Newer PPC CPUs do not support mftbu/mftb */
-    asm volatile(
+    __asm__ __volatile__(
         "Lcpucycles:mfspr %0, 269;mfspr %1, 268;mfspr %2, 269;cmpw %0,%2;bne Lcpucycles"
 		: "=r" (high), "=r" (low), "=r" (newhigh)
 		);
 #else
-    asm volatile(
+    __asm__ __volatile__(
 		"Lcpucycles:mftbu %0;mftb %1;mftbu %2;cmpw %0,%2;bne Lcpucycles"
 		: "=r" (high), "=r" (low), "=r" (newhigh)
 		);
@@ -229,10 +240,8 @@ static inline void jent_get_nstime(uint64_t *out)
 	 */
 	uint64_t tmp = 0;
 	timebasestruct_t aixtime;
-	read_real_time(&aixtime, TIMEBASE_SZ);
-	tmp = aixtime.tb_high;
-	tmp = tmp << 32;
-	tmp = tmp | aixtime.tb_low;
+	tmp = aixtime.tb_high * 1000000000UL;
+	tmp += aixtime.tb_low;
 	*out = tmp;
 # else /* __MACH__ */
 	/* we could use CLOCK_MONOTONIC(_RAW), but with CLOCK_REALTIME
@@ -275,6 +284,16 @@ static inline void *jent_zalloc(size_t len)
 	return tmp;
 }
 
+static inline void jent_memset_secure(void *s, size_t n)
+{
+#if defined(AWSLC)
+	OPENSSL_cleanse(s, n);
+#else
+	memset(s, 0, n);
+	__asm__ __volatile__("" : : "r" (s) : "memory");
+#endif
+}
+
 static inline void jent_zfree(void *ptr, unsigned int len)
 {
 #ifdef LIBGCRYPT
@@ -288,7 +307,7 @@ static inline void jent_zfree(void *ptr, unsigned int len)
 	OPENSSL_cleanse(ptr, len);
 	OPENSSL_free(ptr);
 #else
-	memset(ptr, 0, len);
+	jent_memset_secure(ptr, len);
 	free(ptr);
 #endif /* LIBGCRYPT */
 }
@@ -318,16 +337,6 @@ static inline int jent_fips_enabled(void)
 		return 1;
 	else
 		return 0;
-#endif
-}
-
-static inline void jent_memset_secure(void *s, size_t n)
-{
-#if defined(AWSLC)
-	OPENSSL_cleanse(s, n);
-#else
-	memset(s, 0, n);
-	__asm__ __volatile__("" : : "r" (s) : "memory");
 #endif
 }
 

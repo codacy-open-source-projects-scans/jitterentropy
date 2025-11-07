@@ -10,7 +10,6 @@
 ENTROPYDATA_DIR=${ENTROPYDATA_DIR:-"../results-measurements"}
 
 NONIID_DATA="jent-raw-noise-0001.data"
-IID_DATA="jent-conditioned.data"
 
 # this is where the resulting data and the entropy analysis will be stored
 RESULTS_DIR=${RESULTS_DIR:-"../results-analysis-runtime"}
@@ -20,7 +19,6 @@ LOGFILE="$RESULTS_DIR/processdata.log"
 
 # point to the min entropy tool
 EATOOL_NONIID="../../SP800-90B_EntropyAssessment/cpp/ea_non_iid"
-EATOOL_IID="../../SP800-90B_EntropyAssessment/cpp/ea_iid"
 
 # specify if you want to compile the extractlsb program in this script
 BUILD_EXTRACT=${BUILD_EXTRACT:-"yes"}
@@ -130,7 +128,7 @@ do
 			then
 				echo "Analyzing entropy for $infilesingle ${bits}-bit single" | tee -a $LOGFILE
 				#python -u $EATOOL_NONIID -v $infilesingle $bits > $outfile
-				$EATOOL_NONIID $infilesingle ${bits} -i -a -v > $outfile
+				$EATOOL_NONIID -i -a -v $infilesingle ${bits} > $outfile
 			else
 				echo "File $outfile already generated"
 			fi
@@ -141,40 +139,10 @@ do
 			then
 				echo "Analyzing entropy for $infilevar ${bits}-bit single" | tee -a $LOGFILE
 				#python -u $EATOOL_NONIID -v $infilevar $bits > $outfile
-				$EATOOL_NONIID $infilevar ${bits} -i -a -v > $outfile
+				$EATOOL_NONIID -i -a -v $infilevar ${bits} > $outfile
 			else
 				echo "File $outfile already generated"
 			fi
 		done
 	done
 done
-
-echo "" | tee -a $LOGFILE
-echo "Now analyzing entropy for conditioned data..." | tee -a $LOGFILE
-echo "" | tee -a $LOGFILE
- 
-for file in $ENTROPYDATA_DIR/$IID_DATA
-do
-	bits=8
-	infile=$file
-
-	if [ ! -f $infile ]
-	then
-		continue
-	fi
-
-	filepath=`basename ${file%%.data}`
-	outfile=$RESULTS_DIR/${filepath}.minentropy_${bits}.var.txt
-	inprocess_file=$outfile
-	if [ ! -f $outfile ]
-	then
-		echo "Analyzing entropy for $infile ${bits}-bit var" | tee -a $LOGFILE
-		#python -u $EATOOL_IID -v $infile $bits > $outfile
-		$EATOOL_IID $infile ${bits} -i -a -v > $outfile
-	else
-		echo "File $outfile already generated"
-	fi
-done
-
-inprocess_file=""
-

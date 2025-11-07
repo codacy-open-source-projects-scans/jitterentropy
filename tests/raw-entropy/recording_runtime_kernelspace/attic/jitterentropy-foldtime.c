@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 - 2024, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2019 - 2025, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -110,7 +110,7 @@ void jent_get_nstime(__u64 *out)
 
 #elif (defined(__i386__) || defined(__x86_64__))
 	DECLARE_ARGS(val, low, high);
-	asm volatile("rdtsc" : EAX_EDX_RET(val, low, high));
+	__asm__ __volatile__("rdtsc" : EAX_EDX_RET(val, low, high));
 	*out = EAX_EDX_VAL(val, low, high);
 
 #else

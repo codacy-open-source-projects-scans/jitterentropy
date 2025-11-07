@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 - 2024, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2019 - 2025, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -198,9 +198,7 @@ int main(int argc, char *argv[])
 			prev_timestamp_set = 1;
 			continue;
 		}
-		delta = (timestamp > prev_timestamp) ?
-			timestamp - prev_timestamp :
-			timestamp - prev_timestamp;
+		delta = timestamp - prev_timestamp;
 		prev_timestamp = timestamp;
 
 		unchanged0s |= delta;

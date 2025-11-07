@@ -1,7 +1,7 @@
 /*
  * Non-physical true random number generator based on timing jitter.
  *
- * Copyright Stephan Mueller <smueller@chronox.de>, 2014 - 2024
+ * Copyright Stephan Mueller <smueller@chronox.de>, 2014 - 2025
  *
  * Design
  * ======
@@ -54,6 +54,21 @@
  * SP800-90B requires at least 1024 initial test cycles.
  */
 #define JENT_POWERUP_TESTLOOPCOUNT 1024
+
+/*
+ * ensure_osr_is_at_least_minimal ensures that the over sampling rate is, at
+ * minimum, JENT_MIN_OSR.
+ *
+ * @return returns the argument current_osr if equal to or larger than
+ * JENT_MIN_OSR otherwise, returns JENT_MIN_OSR.
+ */
+static unsigned int ensure_osr_is_at_least_minimal(unsigned int current_osr)
+{
+	if (current_osr < JENT_MIN_OSR)
+		return (unsigned int) JENT_MIN_OSR;
+	else
+		return current_osr;
+}
 
 /**
  * jent_version() - Return machine-usable version number of jent library
@@ -134,10 +149,10 @@ static inline unsigned int jent_update_memsize(unsigned int flags)
  * This function truncates the last 64 bit entropy value output to the exact
  * size specified by the caller.
  *
- * @ec [in] Reference to entropy collector
- * @data [out] pointer to buffer for storing random data -- buffer must
+ * @param[in] ec Reference to entropy collector
+ * @param[out] data pointer to buffer for storing random data -- buffer must
  *	       already exist
- * @len [in] size of the buffer, specifying also the requested number of random
+ * @param[in] len size of the buffer, specifying also the requested number of random
  *	     in bytes
  *
  * @return number of bytes returned when request is fulfilled or an error
@@ -250,11 +265,11 @@ static struct rand_data *_jent_entropy_collector_alloc(unsigned int osr,
  * getting too large. If an error is returned by this function, the Jitter RNG
  * is not safe to be used on the current system.
  *
- * @ec [in] Reference to entropy collector - this is a double pointer as
+ * @param[in] ec Reference to entropy collector - this is a double pointer as
  *	    The entropy collector may be freed and reallocated.
- * @data [out] pointer to buffer for storing random data -- buffer must
+ * @param[out] data pointer to buffer for storing random data -- buffer must
  *	       already exist
- * @len [in] size of the buffer, specifying also the requested number of random
+ * @param[in] len size of the buffer, specifying also the requested number of random
  *	     in bytes
  *
  * @return see jent_read_entropy()
@@ -270,11 +285,9 @@ ssize_t jent_read_entropy_safe(struct rand_data **ec, char *data, size_t len)
 		return -1;
 
 	while (len > 0) {
-		unsigned int osr, flags, max_mem_set, apt_count,
-			     apt_observations = 0,
+		unsigned int osr, flags, max_mem_set, apt_observations = 0,
 			     lag_prediction_success_run,
 			     lag_prediction_success_count;
-		int rct_count;
 		uint64_t current_delta;
 
 		ret = jent_read_entropy(*ec, p, len);
@@ -282,23 +295,23 @@ ssize_t jent_read_entropy_safe(struct rand_data **ec, char *data, size_t len)
 		switch (ret) {
 		case -1:
 		case -4:
+
+			/* Permanent errors are returned immediately */
+		case -6:
+		case -7:
+		case -8:
 			return ret;
+
 		case -2:
 		case -3:
 		case -5:
-			apt_count = (*ec)->apt_count;
 			apt_observations = (*ec)->apt_observations;
 			current_delta = (*ec)->apt_base;
-			rct_count = (*ec)->rct_count;
 			lag_prediction_success_run =
 				(*ec)->lag_prediction_success_run;
 			lag_prediction_success_count =
 				(*ec)->lag_prediction_success_count;
 
-			/* FALLTHROUGH */
-		case -6:
-		case -7:
-		case -8:
 			osr = (*ec)->osr + 1;
 			flags = (*ec)->flags;
 			max_mem_set = (*ec)->max_mem_set;
@@ -341,12 +354,17 @@ ssize_t jent_read_entropy_safe(struct rand_data **ec, char *data, size_t len)
 			 * failures.
 			 */
 			if (apt_observations) {
-				/* APT re-initialization */
-				jent_apt_reinit(*ec, current_delta, apt_count,
+				/*
+				 * APT re-initialization to intermittent error
+				 */
+				jent_apt_reinit(*ec, current_delta, 0,
 						apt_observations);
 
-				/* RCT re-initialization */
-				(*ec)->rct_count = rct_count;
+				/*
+				 * RCT re-initialization to intermittent error
+				 */
+				(*ec)->rct_count =
+					(int)(JENT_HEALTH_RCT_INTERMITTENT_CUTOFF(osr));
 
 				/* LAG re-initialization */
 				(*ec)->lag_prediction_success_run =
@@ -444,6 +462,11 @@ static struct rand_data
 	    (flags & JENT_FORCE_INTERNAL_TIMER))
 		return NULL;
 
+	/*
+	 * Ensure over sampling rate is not too low.
+	 */
+	osr = ensure_osr_is_at_least_minimal(osr);
+
 	/* Force the self test to be run */
 	if (!jent_selftest_run && jent_entropy_init_ex(osr, flags))
 		return NULL;
@@ -492,9 +515,7 @@ static struct rand_data
 	/* Initialize the hash state */
 	jent_sha3_256_init(entropy_collector->hash_state);
 
-	/* verify and set the oversampling rate */
-	if (osr < JENT_MIN_OSR)
-		osr = JENT_MIN_OSR;
+	/* Set the oversampling rate */
 	entropy_collector->osr = osr;
 	entropy_collector->flags = flags;
 
@@ -591,6 +612,11 @@ int jent_time_entropy_init(unsigned int osr, unsigned int flags)
 	uint64_t *delta_history;
 	int i, time_backwards = 0, count_stuck = 0, ret = 0;
 	unsigned int health_test_result;
+
+	/*
+	 * Ensure over sampling rate is not too low.
+	 */
+	osr = ensure_osr_is_at_least_minimal(osr);
 
 	delta_history = jent_gcd_init(JENT_POWERUP_TESTLOOPCOUNT);
 	if (!delta_history)
@@ -701,7 +727,7 @@ int jent_time_entropy_init(unsigned int osr, unsigned int flags)
 		goto out;
 	}
 
-	ret = jent_gcd_analyze(delta_history, JENT_POWERUP_TESTLOOPCOUNT);
+	ret = jent_gcd_analyze(delta_history, JENT_POWERUP_TESTLOOPCOUNT, osr);
 	if (ret)
 		goto out;
 
