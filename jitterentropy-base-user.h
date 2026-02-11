@@ -64,11 +64,6 @@
 #include <errno.h>
 #include <sched.h>
 
-/* Timer-less entropy source */
-#ifdef JENT_CONF_ENABLE_INTERNAL_TIMER
-#include <pthread.h>
-#endif /* JENT_CONF_ENABLE_INTERNAL_TIMER */
-
 #ifdef LIBGCRYPT
 #include <gcrypt.h>
 #endif
@@ -88,6 +83,11 @@
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <unistd.h>
+#endif
+
+/* Override this, if you want to allocate more than 2 MB of secure memory */
+#ifndef JENT_SECURE_MEMORY_SIZE_MAX
+#define JENT_SECURE_MEMORY_SIZE_MAX 2097152
 #endif
 
 #if (__x86_64__) || (__i386__)
@@ -260,6 +260,9 @@ static inline void jent_get_nstime(uint64_t *out)
 
 static inline void *jent_zalloc(size_t len)
 {
+	#define JENT_BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+	#define JENT_IS_POWER_OF_2(n) (JENT_BUILD_BUG_ON((n & (n - 1)) != 0))
+
 	void *tmp = NULL;
 #ifdef LIBGCRYPT
 	/* Set the maximum usable locked memory to 2 MiB at fist call.
@@ -268,7 +271,7 @@ static inline void *jent_zalloc(size_t len)
 	 * also use libgcrypt at other places in your software!
 	 */
 	if (!gcry_control (GCRYCTL_INITIALIZATION_FINISHED_P)) {
-		gcry_control(GCRYCTL_INIT_SECMEM, 2097152, 0);
+		gcry_control(GCRYCTL_INIT_SECMEM, JENT_SECURE_MEMORY_SIZE_MAX, 0);
 		gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
 	}
 	/* When using the libgcrypt secure memory mechanism, all precautions
@@ -291,8 +294,9 @@ static inline void *jent_zalloc(size_t len)
 	 *
 	 * May preallocate more before making the first
 	 * call into jitterentropy!*/
+	JENT_IS_POWER_OF_2(JENT_SECURE_MEMORY_SIZE_MAX);
 	if (CRYPTO_secure_malloc_initialized() ||
-	    CRYPTO_secure_malloc_init(2097152, 32)) {
+	    CRYPTO_secure_malloc_init(JENT_SECURE_MEMORY_SIZE_MAX, 32)) {
 		tmp = OPENSSL_secure_malloc(len);
 	}
 #define CONFIG_CRYPTO_CPU_JITTERENTROPY_SECURE_MEMORY
@@ -310,6 +314,9 @@ static inline void *jent_zalloc(size_t len)
 	if(NULL != tmp)
 		memset(tmp, 0, len);
 	return tmp;
+
+#undef JENT_IS_POWER_OF_2
+#undef JENT_BUILD_BUG_ON
 }
 
 static inline void jent_memset_secure(void *s, size_t n)
@@ -389,7 +396,7 @@ static inline long jent_ncpu(void)
      defined(_SC_LEVEL2_CACHE_SIZE) &&					\
      defined(_SC_LEVEL3_CACHE_SIZE)
 
-static inline void jent_get_cachesize(long *l1, long *l2, long *l3)
+static inline void jent_get_cachesize_sysconf(long *l1, long *l2, long *l3)
 {
 	*l1 = sysconf(_SC_LEVEL1_DCACHE_SIZE);
 	*l2 = sysconf(_SC_LEVEL2_CACHE_SIZE);
@@ -398,7 +405,15 @@ static inline void jent_get_cachesize(long *l1, long *l2, long *l3)
 
 # else
 
-static inline void jent_get_cachesize(long *l1, long *l2, long *l3)
+static inline void jent_get_cachesize_sysconf(long *l1, long *l2, long *l3)
+{
+	*l1 = 0;
+	*l2 = 0;
+	*l3 = 0;
+}
+# endif
+
+static inline void jent_get_cachesize_sysfs(long *l1, long *l2, long *l3)
 {
 #define JENT_SYSFS_CACHE_DIR "/sys/devices/system/cpu/cpu0/cache"
 	long val;
@@ -469,39 +484,52 @@ static inline void jent_get_cachesize(long *l1, long *l2, long *l3)
 #undef JENT_SYSFS_CACHE_DIR
 }
 
-# endif
-
-static inline uint32_t jent_cache_size_roundup(void)
+static inline uint32_t jent_cache_size_to_memory(long l1, long l2, long l3,
+						 int all_caches)
 {
-	static int checked = 0;
-	static uint32_t cache_size = 0;
+	uint32_t cache_size = 0;
 
-	if (!checked) {
-		long l1 = 0, l2 = 0, l3 = 0;
-
-		jent_get_cachesize(&l1, &l2, &l3);
-		checked = 1;
-
-		/* Cache size reported by system */
-		if (l1 > 0)
-			cache_size += (uint32_t)l1;
+	/* Cache size reported by system */
+	if (l1 > 0)
+		cache_size += (uint32_t)l1;
+	if (all_caches) {
 		if (l2 > 0)
 			cache_size += (uint32_t)l2;
 		if (l3 > 0)
 			cache_size += (uint32_t)l3;
+	}
 
-		/*
-		 * Force the output_size to be of the form
-		 * (bounding_power_of_2 - 1).
-		 */
-		cache_size |= (cache_size >> 1);
-		cache_size |= (cache_size >> 2);
-		cache_size |= (cache_size >> 4);
-		cache_size |= (cache_size >> 8);
-		cache_size |= (cache_size >> 16);
+	/* Force the output_size to be of the form (bounding_power_of_2 - 1). */
+	cache_size |= (cache_size >> 1);
+	cache_size |= (cache_size >> 2);
+	cache_size |= (cache_size >> 4);
+	cache_size |= (cache_size >> 8);
+	cache_size |= (cache_size >> 16);
 
-		if (cache_size == 0)
-			return 0;
+	return cache_size;
+}
+
+static inline uint32_t jent_cache_size_roundup(int all_caches)
+{
+	static int checked = 0;
+	uint32_t cache_size = 0;
+	int checked_all_caches = all_caches + 1;
+
+	if (checked != checked_all_caches) {
+		long l1 = 0, l2 = 0, l3 = 0;
+
+		jent_get_cachesize_sysconf(&l1, &l2, &l3);
+		checked = checked_all_caches;
+
+		cache_size = jent_cache_size_to_memory(l1, l2, l3, all_caches);
+		if (cache_size == 0) {
+			jent_get_cachesize_sysfs(&l1, &l2, &l3);
+			cache_size = jent_cache_size_to_memory(l1, l2, l3,
+							       all_caches);
+
+			if (cache_size == 0)
+				return 0;
+		}
 
 		/*
 		 * Make the output_size the smallest power of 2 strictly
@@ -515,8 +543,9 @@ static inline uint32_t jent_cache_size_roundup(void)
 
 #else /* __linux__ */
 
-static inline uint32_t jent_cache_size_roundup(void)
+static inline uint32_t jent_cache_size_roundup(int all_caches)
 {
+	(void)all_caches;
 	return 0;
 }
 

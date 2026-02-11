@@ -48,6 +48,8 @@
 extern "C" {
 #endif
 
+#define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
 #ifndef JENT_STUCK_INIT_THRES
@@ -160,11 +162,30 @@ extern "C" {
  *
  * NOTE: When you modify this value, you are directly altering the behavior of
  * the noise source. Make sure you fully understand what you do. If you want to
- * individually measure the memory access loop entropy rate, use the
+ * individually measure the hash loop entropy rate, use the
  * jitterentropy-hashtime tool with the command line option of --hashloop.
  */
 #ifndef JENT_HASH_LOOP_DEFAULT
 #define JENT_HASH_LOOP_DEFAULT 1
+#endif
+
+/*
+ * Hash loop initialization count: This value defines the multiplier of the
+ * hash loop count during initialization phase, when the SHA-3-based loop is the
+ * sole entropy provider. Typically a higher iteration count is necessary to
+ * take enough time.
+ *
+ * It is permissible to configure this value differently at compile time if the
+ * observed entropy rate is too small.
+ *
+ * NOTE: When you modify this value, you are directly altering the behavior of
+ * the noise source during NTG.1 initialization.
+ * Make sure you fully understand what you do. If you want to
+ * individually measure the hash loop entropy rate, use the
+ * jitterentropy-hashtime tool with the command line option of --hashloop.
+ */
+#ifndef JENT_HASH_LOOP_INIT
+#define JENT_HASH_LOOP_INIT 3
 #endif
 
 /***************************************************************************
@@ -224,25 +245,24 @@ struct rand_data
 	enum jent_startup_state startup_state;
 
 /* The step size should be larger than the cacheline size. */
-#ifndef JENT_MEMORY_BITS
-# define JENT_MEMORY_BITS 17
-#endif
-#ifndef JENT_MEMORY_SIZE
-# define JENT_MEMORY_SIZE (UINT32_C(1)<<JENT_MEMORY_BITS)
+#ifndef JENT_DEFAULT_MEMORY_BITS
+# define JENT_DEFAULT_MEMORY_BITS 18
 #endif
 #ifndef JENT_MEMORY_BLOCKSIZE
 # define JENT_MEMORY_BLOCKSIZE 128
 #endif
-#define JENT_MEMORY_BLOCKS (JENT_MEMORY_SIZE / JENT_MEMORY_BLOCKSIZE)
+#define JENT_MEMORY_BLOCKS(ec) ((ec->memmask + 1) / JENT_MEMORY_BLOCKSIZE)
 
 #define JENT_MEMORY_ACCESSLOOPS 128
 	unsigned char *mem;		/* Memory access location with size of
-					 * JENT_MEMORY_SIZE or memsize */
+					 * memmask + 1 */
 
 	uint32_t memmask;		/* Memory mask (size of memory - 1) */
 	unsigned int memlocation; 	/* Pointer to byte in *mem */
 	unsigned int memaccessloops;	/* Number of memory accesses per random
 					 * bit generation */
+
+	unsigned int hashloopcnt;	/* Hash loop count */
 
 	/* Repetition Count Test */
 	int rct_count;			/* Number of stuck values */

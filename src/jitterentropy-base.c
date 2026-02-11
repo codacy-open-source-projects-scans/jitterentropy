@@ -119,8 +119,29 @@ static inline unsigned int jent_log2_simple(unsigned int val)
 	return idx;
 }
 
-/* Increase the memory size by one step */
-static inline unsigned int jent_update_memsize(unsigned int flags)
+/*
+ * Obtain memory size to allocate for memory access variations.
+ *
+ * The maximum variations we can get from the memory access is when we allocate
+ * a bit more memory than we have as data cache. But allocating as much
+ * memory as we have as data cache might strain the resources on the system
+ * more than necessary.
+ *
+ * On a lot of systems it is not necessary to need so much memory as the
+ * variations coming from the general Jitter RNG execution commonly provide
+ * large amount of variations.
+ *
+ * Thus, the default is:
+ * * size provided by the caller, or
+ * * cache information * (1 << JENT_CACHE_SHIFT_BITS) where by default
+ *   only L1 cache size is uzed or with JENT_CACHE_ALL all caches are used
+ *   to determine the memory size, or
+ * * 1 << JENT_DEFAULT_MEMORY_BITS
+ *
+ * All is capped by JENT_MAX_MEMSIZE_MAX
+ */
+static inline unsigned int jent_update_memsize(unsigned int flags,
+					       unsigned int inc)
 {
 	unsigned int global_max = JENT_FLAGS_TO_MAX_MEMSIZE(
 							JENT_MAX_MEMSIZE_MAX);
@@ -130,15 +151,32 @@ static inline unsigned int jent_update_memsize(unsigned int flags)
 
 	if (!max) {
 		/*
-		 * The safe starting value is the amount of memory we allocated
-		 * last round.
+		 * The safe starting value is the cache size increased by the
+		 * multiplicator.
 		 */
-		max = jent_log2_simple(JENT_MEMORY_SIZE);
+		max = jent_log2_simple(jent_cache_size_roundup(
+						!!(flags & JENT_CACHE_ALL)));
+		if (!max) {
+			max = JENT_DEFAULT_MEMORY_BITS;
+		} else {
+			max += JENT_CACHE_SHIFT_BITS;
+
+			if (!(flags & JENT_CACHE_ALL)) {
+				/*
+				 * We increase the memory size 4-fold. This is
+				 * due to ensure that the memory access
+				 * operation mostly is caused by L1 misses and
+				 * L2 hits.
+				 */
+				max += 2;
+			}
+		}
+
 		/* Adjust offset */
 		max = (max > JENT_MAX_MEMSIZE_OFFSET) ?
-			max - JENT_MAX_MEMSIZE_OFFSET :	0;
+			max - JENT_MAX_MEMSIZE_OFFSET : 0;
 	} else {
-		max++;
+		max += inc;
 	}
 
 	max = (max > global_max) ? global_max : max;
@@ -147,6 +185,24 @@ static inline unsigned int jent_update_memsize(unsigned int flags)
 	flags &= ~JENT_MAX_MEMSIZE_MASK;
 	/* Set the freshly calculated max size */
 	flags |= JENT_MAX_MEMSIZE_TO_FLAGS(max);
+
+	return flags;
+}
+
+static inline unsigned int jent_update_hashloop(unsigned int flags,
+						unsigned int inc)
+{
+	unsigned int global_max = JENT_FLAGS_TO_HASHLOOP(JENT_MAX_HASHLOOP);
+	unsigned int max;
+
+	max = JENT_FLAGS_TO_HASHLOOP(flags);
+	max += inc;
+	max = (max > global_max) ? global_max : max;
+
+	/* Clear out the max size */
+	flags &= ~(unsigned int)JENT_MAX_HASHLOOP_MASK;
+	/* Set the freshly calculated max size */
+	flags |= JENT_HASHLOOP_TO_FLAGS(max);
 
 	return flags;
 }
@@ -347,7 +403,10 @@ ssize_t jent_read_entropy_safe(struct rand_data **ec, char *data, size_t len)
 			 * one step.
 			 */
 			if (!max_mem_set)
-				flags = jent_update_memsize(flags);
+				flags = jent_update_memsize(flags, 1);
+
+			/* Increment hash loop count by one */
+			flags = jent_update_hashloop(flags, 1);
 
 			/*
 			 * re-allocate entropy collector with higher OSR and
@@ -418,65 +477,30 @@ ssize_t jent_read_entropy_safe(struct rand_data **ec, char *data, size_t len)
  * Initialization logic
  ***************************************************************************/
 
-/*
- * Obtain memory size to allocate for memory access variations.
- *
- * The maximum variations we can get from the memory access is when we allocate
- * a bit more memory than we have as data cache. But allocating as much
- * memory as we have as data cache might strain the resources on the system
- * more than necessary.
- *
- * On a lot of systems it is not necessary to need so much memory as the
- * variations coming from the general Jitter RNG execution commonly provide
- * large amount of variations.
- *
- * Thus, the default is:
- *
- * min(JENT_MEMORY_SIZE, data cache size)
- *
- * In case the data cache size cannot be obtained, use JENT_MEMORY_SIZE.
- *
- * If the caller provides a maximum memory size, use
- * min(provided max memory, data cache size).
- */
-static inline uint32_t jent_memsize(unsigned int flags)
+uint32_t jent_memsize(unsigned int flags)
 {
-	uint32_t cache_memsize = 0, max_memsize = 0, memsize = 0;
+	uint32_t memsize = JENT_FLAGS_TO_MAX_MEMSIZE(flags);
 
-	max_memsize = JENT_FLAGS_TO_MAX_MEMSIZE(flags);
-
-	if (max_memsize == 0) {
-		max_memsize = JENT_MEMORY_SIZE;
+	if (memsize == 0) {
+		memsize = JENT_DEFAULT_MEMORY_BITS;
 	} else {
-		max_memsize = UINT32_C(1) << (max_memsize +
-					      JENT_MAX_MEMSIZE_OFFSET);
+		memsize = memsize + JENT_MAX_MEMSIZE_OFFSET;
 	}
 
-	/* Allocate memory for adding variations based on memory access */
-#ifdef JENT_TESTING_MEMSIZE_NO_BOUNDSCHECK
-	cache_memsize = 0xffffffff;
-#else
-	cache_memsize = jent_cache_size_roundup();
-#endif
-	memsize = cache_memsize << JENT_CACHE_SHIFT_BITS;
-
-	/* If this value is left-shifted too much, it may be cleared. */
-	/* If so, set the maximum possible power of two. */
-	if (cache_memsize > memsize)
-		memsize = 0x80000000;
-
-	/* If no memory size can be detected, use the requested size */
-	if (!memsize)
-		memsize = max_memsize;
-
-	/* Limit the memory as defined by caller */
-	memsize = (memsize > max_memsize) ? max_memsize : memsize;
-
-	/* Set a value if none was found */
-	if (!memsize)
-		memsize = JENT_MEMORY_SIZE;
+	memsize = UINT32_C(1) << memsize;
 
 	return memsize;
+}
+
+unsigned int jent_hashloop_cnt(unsigned int flags)
+{
+	unsigned int cnt = JENT_FLAGS_TO_HASHLOOP(flags);
+
+	cnt = UINT32_C(1) << cnt;
+	if (cnt == 0)
+		cnt = JENT_HASH_LOOP_DEFAULT;
+
+	return cnt;
 }
 
 static int jent_selftest_run = 0;
@@ -517,6 +541,7 @@ static struct rand_data
 		return NULL;
 
 	if (!(flags & JENT_DISABLE_MEMORY_ACCESS)) {
+		flags = jent_update_memsize(flags, 0);
 		memsize = jent_memsize(flags);
 		entropy_collector->mem = (unsigned char *)jent_zalloc(memsize);
 
@@ -529,6 +554,10 @@ static struct rand_data
 			goto err;
 		entropy_collector->memaccessloops = JENT_MEMORY_ACCESSLOOPS;
 	}
+
+	/* Set the hash loop count */
+	flags = jent_update_hashloop(flags, 0);
+	entropy_collector->hashloopcnt = jent_hashloop_cnt(flags);
 
 	if (jent_sha3_alloc(&entropy_collector->hash_state))
 		goto err;
@@ -587,6 +616,8 @@ static struct rand_data
 	if (!(flags & JENT_DISABLE_INTERNAL_TIMER)) {
 		if (jent_notime_enable(entropy_collector, flags))
 			goto err;
+		if (jent_notime_settick(entropy_collector))
+			goto err;
 	}
 
 	/*
@@ -605,9 +636,14 @@ static struct rand_data
 		jent_random_data(entropy_collector);
 	} while(entropy_collector->startup_state != jent_startup_completed);
 
+	/* Disable timer thread again after initialization.
+	 * Also works if not used above. */
+	jent_notime_unsettick(entropy_collector);
+
 	return entropy_collector;
 
 err:
+	jent_notime_unsettick(entropy_collector);
 	if (entropy_collector->mem != NULL)
 		jent_zfree(entropy_collector->mem, memsize);
 	if (entropy_collector->hash_state != NULL)

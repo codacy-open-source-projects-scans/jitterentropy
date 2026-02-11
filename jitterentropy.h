@@ -42,7 +42,7 @@
 #ifndef _JITTERENTROPY_H
 #define _JITTERENTROPY_H
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) || defined(__MINGW32__)
 #include "arch/jitterentropy-base-windows.h"
 #else
 #include "jitterentropy-base-user.h"
@@ -91,6 +91,10 @@ extern "C" {
 					     including full SP800-90B
 					     compliance. */
 #define JENT_NTG1 (1<<6) /* AIS 20/31 NTG.1 compliance */
+#define JENT_CACHE_ALL (1<<7) /* Shall size of all caches be used to
+				 automatically determine the memory size for the
+				 memory access? By default it is only the L1
+				 cache size. */
 
 /* Flags field limiting the amount of memory to be used for memory access */
 #define JENT_FLAGS_TO_MEMSIZE_SHIFT	27
@@ -117,12 +121,28 @@ extern "C" {
 #define JENT_MAX_MEMSIZE_256MB		JENT_MAX_MEMSIZE_TO_FLAGS(UINT32_C(19))
 #define JENT_MAX_MEMSIZE_512MB		JENT_MAX_MEMSIZE_TO_FLAGS(UINT32_C(20))
 #define JENT_MAX_MEMSIZE_MAX		JENT_MAX_MEMSIZE_512MB
-#define JENT_MAX_MEMSIZE_MASK		JENT_MAX_MEMSIZE_MAX
+#define JENT_MAX_MEMSIZE_MASK		JENT_MAX_MEMSIZE_TO_FLAGS(0xffffffff)
 /*
  * We start at 1kB -> offset is log2(1024) - 1 as the flag value above is added
  * to this offset.
  */
 #define JENT_MAX_MEMSIZE_OFFSET		9
+
+/* Flags field defining the hash loop */
+#define JENT_FLAGS_TO_HASHLOOP_SHIFT	24
+#define JENT_HASHLOOP_TO_FLAGS(val)	(val << JENT_FLAGS_TO_HASHLOOP_SHIFT)
+#define JENT_MAX_HASHLOOP_MASK		JENT_HASHLOOP_TO_FLAGS(0x7)
+#define JENT_FLAGS_TO_HASHLOOP(val)	((val >> JENT_FLAGS_TO_HASHLOOP_SHIFT) &\
+					 0x7)
+#define JENT_HASHLOOP_1			JENT_HASHLOOP_TO_FLAGS(UINT32_C(0))
+#define JENT_HASHLOOP_2			JENT_HASHLOOP_TO_FLAGS(UINT32_C(1))
+#define JENT_HASHLOOP_4			JENT_HASHLOOP_TO_FLAGS(UINT32_C(2))
+#define JENT_HASHLOOP_8			JENT_HASHLOOP_TO_FLAGS(UINT32_C(3))
+#define JENT_HASHLOOP_16		JENT_HASHLOOP_TO_FLAGS(UINT32_C(4))
+#define JENT_HASHLOOP_32		JENT_HASHLOOP_TO_FLAGS(UINT32_C(5))
+#define JENT_HASHLOOP_64		JENT_HASHLOOP_TO_FLAGS(UINT32_C(6))
+#define JENT_HASHLOOP_128		JENT_HASHLOOP_TO_FLAGS(UINT32_C(7))
+#define JENT_MAX_HASHLOOP		JENT_HASHLOOP_128
 
 #ifdef JENT_PRIVATE_COMPILE
 # define JENT_PRIVATE_STATIC static
@@ -132,6 +152,10 @@ extern "C" {
 #else
 #define JENT_PRIVATE_STATIC __attribute__((visibility("default")))
 #endif
+#endif
+
+#if defined(__MINGW32__) || defined(__APPLE__)
+#define JENT_PTHREAD
 #endif
 
 /* Forward declaration of opaque value */
@@ -169,6 +193,10 @@ int jent_set_fips_failure_callback(jent_fips_failure_cb cb);
 /* return version number of core library */
 JENT_PRIVATE_STATIC
 unsigned int jent_version(void);
+
+/* print out human-readable status of the Jitter RNG */
+JENT_PRIVATE_STATIC
+int jent_status(const struct rand_data *ec, char *buf, size_t buflen);
 
 /* return secure memory support, must be done
  * in jitterentropy itself, as users may not define
@@ -217,7 +245,11 @@ struct jent_notime_thread {
 	int (*jent_notime_init)(void **ctx);
 	void (*jent_notime_fini)(void *ctx);
 	int (*jent_notime_start)(void *ctx,
-				 void *(*start_routine) (void *), void *arg);
+#ifdef JENT_PTHREAD
+		void *(*start_routine) (void *), void *arg);
+#else
+		int (*start_routine)(void *), void *arg);
+#endif
 	void (*jent_notime_stop)(void *ctx);
 };
 
