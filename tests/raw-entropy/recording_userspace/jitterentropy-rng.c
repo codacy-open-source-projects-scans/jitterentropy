@@ -26,19 +26,19 @@
 
 int main(int argc, char * argv[])
 {
-	unsigned long size, rounds;
+	unsigned long long size, rounds;
 	int ret = 0;
 	unsigned int flags = 0, osr = 0;
 	struct rand_data *ec_nostir;
-	char status[600];
+	char status[700];
 
 	if (argc < 2) {
 		printf("%s <number of measurements> [--ntg1|--force-fips|--disable-memory-access|--disable-internal-timer|--force-internal-timer|--all-caches|--osr <OSR>|--max-mem <NUM>|--hloopcnt <NUM>]\n", argv[0]);
 		return 1;
 	}
 
-	rounds = strtoul(argv[1], NULL, 10);
-	if (rounds >= UINT_MAX)
+	rounds = strtoull(argv[1], NULL, 10);
+	if (rounds >= ULLONG_MAX)
 		return 1;
 	argc--;
 	argv++;
@@ -86,48 +86,63 @@ int main(int argc, char * argv[])
 				/* Allow to set no option */
 				break;
 			case 1:
-				flags |= JENT_MAX_MEMSIZE_32kB;
+				flags |= JENT_MAX_MEMSIZE_1kB;
 				break;
 			case 2:
-				flags |= JENT_MAX_MEMSIZE_64kB;
+				flags |= JENT_MAX_MEMSIZE_2kB;
 				break;
 			case 3:
-				flags |= JENT_MAX_MEMSIZE_128kB;
+				flags |= JENT_MAX_MEMSIZE_4kB;
 				break;
 			case 4:
-				flags |= JENT_MAX_MEMSIZE_256kB;
+				flags |= JENT_MAX_MEMSIZE_8kB;
 				break;
 			case 5:
-				flags |= JENT_MAX_MEMSIZE_512kB;
+				flags |= JENT_MAX_MEMSIZE_16kB;
 				break;
 			case 6:
-				flags |= JENT_MAX_MEMSIZE_1MB;
+				flags |= JENT_MAX_MEMSIZE_32kB;
 				break;
 			case 7:
-				flags |= JENT_MAX_MEMSIZE_2MB;
+				flags |= JENT_MAX_MEMSIZE_64kB;
 				break;
 			case 8:
-				flags |= JENT_MAX_MEMSIZE_4MB;
+				flags |= JENT_MAX_MEMSIZE_128kB;
 				break;
 			case 9:
-				flags |= JENT_MAX_MEMSIZE_8MB;
+				flags |= JENT_MAX_MEMSIZE_256kB;
 				break;
 			case 10:
-				flags |= JENT_MAX_MEMSIZE_16MB;
+				flags |= JENT_MAX_MEMSIZE_512kB;
 				break;
 			case 11:
-				flags |= JENT_MAX_MEMSIZE_32MB;
+				flags |= JENT_MAX_MEMSIZE_1MB;
 				break;
 			case 12:
-				flags |= JENT_MAX_MEMSIZE_64MB;
+				flags |= JENT_MAX_MEMSIZE_2MB;
 				break;
 			case 13:
-				flags |= JENT_MAX_MEMSIZE_128MB;
+				flags |= JENT_MAX_MEMSIZE_4MB;
 				break;
 			case 14:
-				flags |= JENT_MAX_MEMSIZE_256MB;
+				flags |= JENT_MAX_MEMSIZE_8MB;
 				break;
 			case 15:
+				flags |= JENT_MAX_MEMSIZE_16MB;
+				break;
+			case 16:
+				flags |= JENT_MAX_MEMSIZE_32MB;
+				break;
+			case 17:
+				flags |= JENT_MAX_MEMSIZE_64MB;
+				break;
+			case 18:
+				flags |= JENT_MAX_MEMSIZE_128MB;
+				break;
+			case 19:
+				flags |= JENT_MAX_MEMSIZE_256MB;
+				break;
+			case 20:
 				flags |= JENT_MAX_MEMSIZE_512MB;
 				break;
 			default:
@@ -140,7 +155,7 @@ int main(int argc, char * argv[])
 			argc--;
 			argv++;
 			if (argc <= 1) {
-				printf("Maximum memory value missing\n");
+				printf("Hash loop count value missing\n");
 				return 1;
 			}
 
@@ -207,7 +222,7 @@ int main(int argc, char * argv[])
 		char tmp[32];
 
 		if (0 > jent_read_entropy_safe(&ec_nostir, tmp, sizeof(tmp))) {
-			fprintf(stderr, "FIPS 140-2 continuous test failed\n");
+			fprintf(stderr, "FIPS 140-3 health test failed\n");
 			ret = 1;
 			goto out;
 		}

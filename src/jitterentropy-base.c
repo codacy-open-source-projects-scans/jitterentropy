@@ -496,9 +496,10 @@ unsigned int jent_hashloop_cnt(unsigned int flags)
 {
 	unsigned int cnt = JENT_FLAGS_TO_HASHLOOP(flags);
 
-	cnt = UINT32_C(1) << cnt;
 	if (cnt == 0)
 		cnt = JENT_HASH_LOOP_DEFAULT;
+	else
+		cnt = UINT32_C(1) << cnt;
 
 	return cnt;
 }
@@ -552,7 +553,7 @@ static struct rand_data
 		entropy_collector->memmask = memsize - 1;
 		if (entropy_collector->mem == NULL)
 			goto err;
-		entropy_collector->memaccessloops = JENT_MEMORY_ACCESSLOOPS;
+		entropy_collector->memaccessloops = JENT_MEM_ACC_LOOP_DEFAULT;
 	}
 
 	/* Set the hash loop count */
@@ -690,6 +691,10 @@ void jent_entropy_collector_free(struct rand_data *entropy_collector)
 {
 	if (entropy_collector != NULL) {
 		jent_sha3_dealloc(entropy_collector->hash_state);
+
+		/* Safety measure */
+		jent_notime_unsettick(entropy_collector);
+
 		jent_notime_disable(entropy_collector);
 		if (entropy_collector->mem != NULL) {
 			jent_zfree(entropy_collector->mem,
@@ -835,7 +840,8 @@ int jent_time_entropy_init(unsigned int osr, unsigned int flags)
 out:
 	jent_gcd_fini(delta_history, JENT_POWERUP_TESTLOOPCOUNT);
 
-	if ((flags & JENT_FORCE_INTERNAL_TIMER) && ec)
+	/* NOOP if notime disabled. Can be done unconditionally */
+	if (ec)
 		jent_notime_unsettick(ec);
 
 	jent_entropy_collector_free(ec);

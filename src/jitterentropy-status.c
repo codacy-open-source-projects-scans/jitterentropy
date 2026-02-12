@@ -50,13 +50,19 @@ int jent_status(const struct rand_data *ec, char *buf, size_t buflen)
 
 	used = strlen(buf);
 	snprintf(buf + used, buflen - used,
-		 " Memory Access loop count: %u\n",
-		 JENT_MEMORY_ACCESSLOOPS);
+		 " Memory Access loop count:\n  runtime: %u\n  initialization: %u\n",
+		 ec->memaccessloops,
+		 ec->memaccessloops * JENT_MEM_ACC_LOOP_INIT);
 
 	used = strlen(buf);
 	snprintf(buf + used, buflen - used,
 		" Secure Memory: %i\n",
-			jent_secure_memory_supported());
+		jent_secure_memory_supported());
+
+	used = strlen(buf);
+	snprintf(buf + used, buflen - used,
+		" Internal Timer: %i\n",
+		ec->enable_notime);
 
 	used = strlen(buf);
 	snprintf(buf + used, buflen - used, " Flags:\n");

@@ -117,14 +117,12 @@ static void jent_hash_loop(struct rand_data *ec,
 	uint64_t j = 0;
 
 	/*
-	 * testing purposes -- allow test app to set the counter, not
-	 * needed during runtime
+	 * allow caller to set the counter
 	 */
 	uint64_t hash_loop_cnt = loop_cnt ? loop_cnt : ec->hashloopcnt;
 
 	BUILD_BUG_ON(JENT_HASH_LOOP_DEFAULT < 1);
 	BUILD_BUG_ON(JENT_HASH_LOOP_INIT < 1);
-	BUILD_BUG_ON(JENT_HASH_LOOP_DEFAULT > JENT_HASH_LOOP_INIT);
 
 	jent_sha3_256_init(&ctx);
 
@@ -202,10 +200,9 @@ static void jent_memaccess_pseudorandom(struct rand_data *ec, uint64_t loop_cnt,
 	uint32_t addressMask;
 
 	/*
-	 * testing purposes -- allow test app to set the counter, not
-	 * needed during runtime
+	 * allow caller to set the counter
 	 */
-	uint64_t acc_loop_cnt = loop_cnt ? loop_cnt : JENT_MEM_ACC_LOOP_DEFAULT;
+	uint64_t mem_loop_cnt = loop_cnt ? loop_cnt : ec->memaccessloops;
 
 	if (NULL == ec || NULL == ec->mem)
 		return;
@@ -234,7 +231,7 @@ static void jent_memaccess_pseudorandom(struct rand_data *ec, uint64_t loop_cnt,
 	if (current_delta)
 		jent_get_nstime_internal(ec, &time_now_start);
 
-	for (i = 0; i < (ec->memaccessloops + acc_loop_cnt); i++) {
+	for (i = 0; i < mem_loop_cnt; i++) {
 		/* Take PRNG output to find the memory location to update. */
 		unsigned char *tmpval = ec->mem +
 					(xoshiro128starstar(prngState.u) &
@@ -293,10 +290,9 @@ static void jent_memaccess_deterministic(struct rand_data *ec,
 	uint64_t i = 0;
 
 	/*
-	 * testing purposes -- allow test app to set the counter, not
-	 * needed during runtime
+	 * allow caller to set the counter
 	 */
-	uint64_t acc_loop_cnt = loop_cnt ? loop_cnt : JENT_MEM_ACC_LOOP_DEFAULT;
+	uint64_t mem_loop_cnt = loop_cnt ? loop_cnt : ec->memaccessloops;
 
 	if (NULL == ec || NULL == ec->mem)
 		return;
@@ -305,7 +301,7 @@ static void jent_memaccess_deterministic(struct rand_data *ec,
         if (current_delta)
 		jent_get_nstime_internal(ec, &time_now_start);
 
-	for (i = 0; i < (ec->memaccessloops + acc_loop_cnt); i++) {
+	for (i = 0; i < mem_loop_cnt; i++) {
 		unsigned char *tmpval = ec->mem + ec->memlocation;
 
 		/*
@@ -375,9 +371,10 @@ unsigned int jent_measure_jitter_ntg1_memaccess(struct rand_data *ec,
 	 * requirement of at least 240 bits of entropy from the L2/L3/RAM
 	 * accesses.
 	 */
-	jent_memaccess_deterministic(ec, loop_cnt ? loop_cnt :
-						    ec->memaccessloops * 2,
-				     &current_delta);
+	jent_memaccess_deterministic(
+		ec, loop_cnt ? loop_cnt :
+			       ec->memaccessloops * JENT_MEM_ACC_LOOP_INIT,
+		&current_delta);
 
 	/*
 	 * Check whether we have a stuck measurement - and apply the health
