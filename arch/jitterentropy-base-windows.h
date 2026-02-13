@@ -71,6 +71,11 @@ typedef int64_t ssize_t;
 #include <windows.h>
 #endif
 
+/* Override this, if you want to allocate more than 2 MB of secure memory */
+#ifndef JENT_SECURE_MEMORY_SIZE_MAX
+#define JENT_SECURE_MEMORY_SIZE_MAX 2097152
+#endif
+
 static inline void jent_get_nstime(uint64_t *out)
 {
 #if defined(_M_ARM) || defined(_M_ARM64)
@@ -98,7 +103,7 @@ static inline void *jent_zalloc(size_t len)
 	 * also use libgcrypt at other places in your software!
 	 */
 	if (!gcry_control (GCRYCTL_INITIALIZATION_FINISHED_P)) {
-		gcry_control(GCRYCTL_INIT_SECMEM, 2097152, 0);
+		gcry_control(GCRYCTL_INIT_SECMEM, JENT_SECURE_MEMORY_SIZE_MAX, 0);
 		gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
 	}
 	/* When using the libgcrypt secure memory mechanism, all precautions
@@ -122,7 +127,7 @@ static inline void *jent_zalloc(size_t len)
 	 * May preallocate more before making the first
 	 * call into jitterentropy!*/
 	if (CRYPTO_secure_malloc_initialized() ||
-	    CRYPTO_secure_malloc_init(2097152, 32)) {
+	    CRYPTO_secure_malloc_init(JENT_SECURE_MEMORY_SIZE_MAX, 32)) {
 		tmp = OPENSSL_secure_malloc(len);
 	}
 #define CONFIG_CRYPTO_CPU_JITTERENTROPY_SECURE_MEMORY
@@ -197,76 +202,75 @@ static inline void jent_yield(void)
 
 static inline uint32_t jent_cache_size_roundup(int all_caches)
 {
-	static int checked = 0;
-	static uint32_t cache_size = 0;
+	uint32_t cache_size = 0;
+	DWORD l1 = 0, l2 = 0, l3 = 0;
+	DWORD len = 0;
+	PSYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer = NULL;
 
-	if (!checked) {
-		DWORD l1 = 0, l2 = 0, l3 = 0;
-		DWORD len = 0;
-		PSYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer = NULL;
+	/* First call to get buffer size */
+	if (!GetLogicalProcessorInformation(NULL, &len) &&
+		GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+		return 0;
+	}
 
-		/* First call to get buffer size */
-		if (!GetLogicalProcessorInformation(NULL, &len) &&
-			GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-			return 0;
-		}
+	buffer = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION)malloc(len);
+	if (!buffer)
+		return 0;
 
-		buffer = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION)malloc(len);
-		if (!buffer)
-			return 0;
+	/* Second call to retrieve data */
+	if (!GetLogicalProcessorInformation(buffer, &len)) {
+		free(buffer);
+		return 0;
+	}
 
-		/* Second call to retrieve data */
-		if (!GetLogicalProcessorInformation(buffer, &len)) {
-			free(buffer);
-			return 0;
-		}
+	DWORD count = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
 
-		DWORD count = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+	for (DWORD i = 0; i < count; i++) {
+		if (buffer[i].Relationship == RelationCache) {
+			CACHE_DESCRIPTOR* cache = &buffer[i].Cache;
 
-		for (DWORD i = 0; i < count; i++) {
-			if (buffer[i].Relationship == RelationCache) {
-				CACHE_DESCRIPTOR cache = buffer[i].Cache;
-				switch (cache.Level) {
-					case 1: l1 = cache.Size; break;
-					case 2: l2 = cache.Size; break;
-					case 3: l3 = cache.Size; break;
-				}
+			if (cache->Level == 1 && cache->Type == CacheData) {
+				l1 = cache->Size;
+			}
+			else if (cache->Level == 2 && (cache->Type == CacheUnified || cache->Type == CacheData)) {
+				l2 = cache->Size;
+			}
+			else if (cache->Level == 3 && (cache->Type == CacheUnified || cache->Type == CacheData)) {
+				l3 = cache->Size;
 			}
 		}
-
-		free(buffer);
-
-		checked = 1;
-
-		/* Cache size reported by system */
-		if (l1 > 0)
-			cache_size += (uint32_t)l1;
-		if (all_caches) {
-			if (l2 > 0)
-				cache_size += (uint32_t)l2;
-			if (l3 > 0)
-				cache_size += (uint32_t)l3;
-		}
-
-		/*
-		 * Force the output_size to be of the form
-		 * (bounding_power_of_2 - 1).
-		 */
-		cache_size |= (cache_size >> 1);
-		cache_size |= (cache_size >> 2);
-		cache_size |= (cache_size >> 4);
-		cache_size |= (cache_size >> 8);
-		cache_size |= (cache_size >> 16);
-
-		if (cache_size == 0)
-			return 0;
-
-		/*
-		 * Make the output_size the smallest power of 2 strictly
-		 * greater than cache_size.
-		 */
-		cache_size++;
 	}
+
+	free(buffer);
+
+	/* Cache size reported by system */
+	if (l1 > 0)
+		cache_size += (uint32_t)l1;
+	if (all_caches) {
+		if (l2 > 0)
+			cache_size += (uint32_t)l2;
+		if (l3 > 0)
+			cache_size += (uint32_t)l3;
+	}
+
+	/*
+	 * Force the output_size to be of the form
+	 * (bounding_power_of_2 - 1).
+	 */
+	cache_size |= (cache_size >> 1);
+	cache_size |= (cache_size >> 2);
+	cache_size |= (cache_size >> 4);
+	cache_size |= (cache_size >> 8);
+	cache_size |= (cache_size >> 16);
+
+	if (cache_size == 0)
+		return 0;
+
+	/*
+	 * Make the output_size the smallest power of 2 strictly
+	 * greater than cache_size.
+	 */
+	cache_size++;
 
 	return cache_size;
 }
