@@ -530,6 +530,12 @@ static struct rand_data
 		return NULL;
 
 	/*
+	 * NTG.1 requires to disable the internal timer.
+	 */
+	if (flags & JENT_NTG1)
+		flags |= JENT_DISABLE_INTERNAL_TIMER;
+
+	/*
 	 * If the initial test code concludes to force the internal timer
 	 * and the user requests it not to be used, do not allocate
 	 * the Jitter RNG instance.
@@ -598,7 +604,9 @@ static struct rand_data
 	}
 
 	/* Initialize the health tests */
-	jent_health_init(entropy_collector);
+	jent_health_init(entropy_collector, flags & JENT_NTG1 ?
+					    jent_health_init_type_ntg1_startup :
+					    jent_health_init_type_common);
 
 	/* Was jent_entropy_init run (establishing the common GCD)? */
 	if (jent_gcd_get(&entropy_collector->jent_common_timer_gcd)) {

@@ -38,6 +38,7 @@
 #include "jitterentropy-noise.c"
 #include "jitterentropy-timer.c"
 #include "jitterentropy-base.c"
+#include "jitterentropy-status.c"
 
 #ifndef REPORT_COUNTER_TICKS
 #define REPORT_COUNTER_TICKS 1
@@ -55,7 +56,8 @@ enum jent_es {
 static int jent_one_test(const char *pathname, unsigned long rounds,
 			 unsigned int flags, unsigned int osr,
 			 enum jent_es jent_es, unsigned int loopcnt,
-			 int report_counter_ticks)
+			 int report_counter_ticks,
+			 unsigned int status)
 {
 	unsigned long size = 0;
 	struct rand_data *ec = NULL;
@@ -75,22 +77,42 @@ static int jent_one_test(const char *pathname, unsigned long rounds,
 	if (!duration)
 		return 1;
 
-	printf("Processing %s\n", pathname);
-
-	out = fopen(pathname, "w");
-	if (!out) {
-		ret = 1;
-		goto out;
-	}
-
+	/*
+	 * Do not perform the common startup check as the health test may
+	 * disable the Jitter RNG. However, as we are in test mode, we
+	 * *want* to also know about insufficient entropy.
+	 * Thus, only perform the cryptographic self tests and go on.
+	 */
+#if 0
 	ret = jent_entropy_init_ex(osr, flags);
 	if (ret) {
 		printf("The initialization failed with error code %d\n", ret);
 		goto out;
 	}
+#else
+	jent_entropy_init_common_pre();
+#endif
+
 	ec = jent_entropy_collector_alloc(osr, flags);
 	if (!ec) {
 		ret = 1;
+		goto out;
+	}
+
+	/*
+	 * early exit, when status is requested. Can be used to
+	 * compare config of measurements with runtime
+	 */
+	if (status) {
+		char status_str[1000];
+
+		ret = jent_status(ec, status_str, sizeof(status_str));
+		if (ret) {
+			printf("Fetching jent status failed with code: %d\n", ret);
+			goto out;
+		}
+		printf("%s", status_str);
+		ret = 0;
 		goto out;
 	}
 
@@ -108,6 +130,14 @@ static int jent_one_test(const char *pathname, unsigned long rounds,
 
 	/* Enable full SP800-90B health test handling */
 	ec->fips_enabled = 1;
+
+	printf("Processing %s\n", pathname);
+
+	out = fopen(pathname, "w");
+	if (!out) {
+		ret = 1;
+		goto out;
+	}
 
 	/* Print the size of the memory region. */
 #ifdef JENT_RANDOM_MEMACCESS
@@ -200,12 +230,13 @@ int main(int argc, char * argv[])
 	const char *file;
 	unsigned long i, rounds, repeats;
 	unsigned int flags = 0, osr = 0, loopcnt = 0;
+	unsigned int status = 0;
 	enum jent_es jent_es = jent_common;
 	int ret;
 	char pathname[4096];
 
 	if (argc < 4) {
-		printf("%s <rounds per repeat> <number of repeats> <filename> [--ntg1|--force-fips|--disable-memory-access|--disable-internal-timer|--force-internal-timer|--osr <OSR>|--loopcnt <NUM>|--max-mem <NUM>|--hashloop|--memaccess|--all-caches|--hloopcnt <NUM>]\n", argv[0]);
+		printf("%s <rounds per repeat> <number of repeats> <filename> [--ntg1|--force-fips|--disable-memory-access|--disable-internal-timer|--force-internal-timer|--osr <OSR>|--loopcnt <NUM>|--max-mem <NUM>|--hashloop|--memaccess|--all-caches|--hloopcnt <NUM>|--status]\n", argv[0]);
 		return 1;
 	}
 
@@ -389,6 +420,8 @@ int main(int argc, char * argv[])
 				printf("Unknown hashloop value\n");
 				return 1;
 			}
+		} else if (!strncmp(argv[1], "--status", 8)) {
+			status = 1;
 		} else {
 			printf("Unknown option %s\n", argv[1]);
 			return 1;
@@ -406,7 +439,7 @@ int main(int argc, char * argv[])
 #endif
 
 		ret = jent_one_test(pathname, rounds, flags, osr, jent_es,
-				    loopcnt, REPORT_COUNTER_TICKS);
+				    loopcnt, REPORT_COUNTER_TICKS, status);
 
 		if (ret)
 			return ret;
