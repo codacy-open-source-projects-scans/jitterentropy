@@ -336,10 +336,17 @@ struct rand_data
 	uint64_t apt_base;		/* APT base reference */
 	unsigned int health_failure;	/* Permanent health failure */
 
+	/* RCT with memory */
+	unsigned short rct_mem_count;	/* Number of stuck values */
+	unsigned short gen_loop_iter;	/* Loop iteration for generating random bytes */
+	unsigned short rct_mem_cutoff;	/* RCT intermittent cutoff */
+	unsigned short rct_mem_cutoff_permanent; /* RCT permanent cutoff */
+
 	unsigned int apt_base_set:1;	/* APT base reference set? */
 	unsigned int fips_enabled:1;
 	unsigned int enable_notime:1;	/* Use internal high-res timer */
 	unsigned int max_mem_set:1;	/* Maximum memory configured by user */
+	unsigned int in_recovery:1;	/* Flag to indicate a recovery op. */
 
 #ifdef JENT_CONF_ENABLE_INTERNAL_TIMER
 	volatile uint8_t notime_interrupt;	/* indicator to interrupt ctr */
