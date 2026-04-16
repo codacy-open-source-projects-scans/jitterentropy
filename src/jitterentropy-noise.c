@@ -535,7 +535,7 @@ unsigned int jent_measure_jitter(struct rand_data *ec,
  * Therefore, round up the jitter loop counter to the nearest multiple of three.
  */
 #define JENT_ROUNDUP_TO_THREE(x)                                               \
-	( (((x) * 3) + 2) / 3 )
+	( (((x) + 2) / 3) * 3 )
 #define JENT_ADJUSTED_MEASURE_JITTER_LOOP_CTR(_osr, _safety_factor)            \
 	JENT_ROUNDUP_TO_THREE(                                                 \
 		JENT_MEASURE_JITTER_LOOP_CTR(_osr, _safety_factor))
@@ -596,7 +596,7 @@ void jent_random_data(struct rand_data *ec)
 		 * independently invoke the next noise source.
 		 */
 		jent_health_init(ec, ec->flags & JENT_NTG1 ?
-				     jent_health_init_type_ntg1_startup :
+				     jent_health_init_type_ntg1 :
 				     jent_health_init_type_common);
 
 		/* FALLTHROUGH */
@@ -609,7 +609,7 @@ void jent_random_data(struct rand_data *ec)
 		 * independently invoke the next noise source.
 		 */
 		jent_health_init(ec, ec->flags & JENT_NTG1 ?
-				     jent_health_init_type_ntg1_runtime :
+				     jent_health_init_type_ntg1 :
 				     jent_health_init_type_common);
 
 		break;

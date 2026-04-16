@@ -77,7 +77,7 @@
 #include <openssl/crypto.h>
 #endif
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
 
@@ -131,23 +131,23 @@ static inline void jent_get_nstime(uint64_t *out)
 
 static inline void jent_get_nstime(uint64_t *out)
 {
-        uint64_t ctr_val;
+	uint64_t ctr_val;
 #if !defined(__MACH__)
-        /*
-         * Use the system counter for aarch64 (64 bit ARM)...
-         */
-        __asm__ __volatile__("mrs %0, " AARCH64_NSTIME_REGISTER : "=r" (ctr_val));
+	/*
+	 * Use the system counter for aarch64 (64 bit ARM)...
+	 */
+	__asm__ __volatile__("mrs %0, " AARCH64_NSTIME_REGISTER : "=r" (ctr_val));
 #else
-        /*
-         * Except on modern Apple platforms. Especially on M1 generation Arm64
-         * CPUs, the system counter is too coarse. Instead, use
-         * clock_gettime_nsec_np(CLOCK_UPTIME_RAW), that is equivalent to
-         * march_absolute_time(), but scaled to nanoseconds. See e.g.
-         * https://www.manpagez.com/man/3/clock_gettime_nsec_np/.
-         */
-        ctr_val = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+	/*
+	 * Except on modern Apple platforms. Especially on M1 generation Arm64
+	 * CPUs, the system counter is too coarse. Instead, use
+	 * clock_gettime_nsec_np(CLOCK_UPTIME_RAW), that is equivalent to
+	 * march_absolute_time(), but scaled to nanoseconds. See e.g.
+	 * https://www.manpagez.com/man/3/clock_gettime_nsec_np/.
+	 */
+	ctr_val = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
-        *out = ctr_val;
+	*out = ctr_val;
 }
 
 #elif defined(__s390x__)
@@ -215,12 +215,12 @@ static inline void jent_get_nstime(uint64_t *out)
 	unsigned long newhigh;
 	uint64_t result;
 #ifdef POWER_PC_USE_NEW_INSTRUCTIONS /* Newer PPC CPUs do not support mftbu/mftb */
-    __asm__ __volatile__(
-        "Lcpucycles:mfspr %0, 269;mfspr %1, 268;mfspr %2, 269;cmpw %0,%2;bne Lcpucycles"
+	__asm__ __volatile__(
+		"Lcpucycles:mfspr %0, 269;mfspr %1, 268;mfspr %2, 269;cmpw %0,%2;bne Lcpucycles"
 		: "=r" (high), "=r" (low), "=r" (newhigh)
 		);
 #else
-    __asm__ __volatile__(
+	__asm__ __volatile__(
 		"Lcpucycles:mftbu %0;mftb %1;mftbu %2;cmpw %0,%2;bne Lcpucycles"
 		: "=r" (high), "=r" (low), "=r" (newhigh)
 		);
@@ -235,12 +235,15 @@ static inline void jent_get_nstime(uint64_t *out)
 
 static inline void jent_get_nstime(uint64_t *out)
 {
-	/* OSX does not have clock_gettime -- taken from
-	 * http://developer.apple.com/library/mac/qa/qa1398/_index.html */
+	/*
+	 * OSX does not have clock_gettime -- taken from
+	 * http://developer.apple.com/library/mac/qa/qa1398/_index.html
+	 */
 # ifdef __MACH__
 	*out = mach_absolute_time();
 # elif _AIX
-	/* clock_gettime() on AIX returns a timer value that increments in
+	/*
+	 * clock_gettime() on AIX returns a timer value that increments in
 	 * steps of 1000
 	 */
 	uint64_t tmp = 0;
@@ -257,8 +260,7 @@ static inline void jent_get_nstime(uint64_t *out)
 	 * extra little entropy */
 	uint64_t tmp = 0;
 	struct timespec time;
-	if (clock_gettime(CLOCK_REALTIME, &time) == 0)
-	{
+	if (clock_gettime(CLOCK_REALTIME, &time) == 0) {
 		tmp = ((uint64_t)time.tv_sec & 0xFFFFFFFF) * 1000000000UL;
 		tmp = tmp + (uint64_t)time.tv_nsec;
 	}
@@ -267,6 +269,16 @@ static inline void jent_get_nstime(uint64_t *out)
 }
 
 #endif /* (__x86_64__) || (__i386__) || (__aarch64__) */
+
+static inline void jent_memset_secure(void *s, size_t n)
+{
+#if (defined(AWSLC) || defined(OPENSSL))
+	OPENSSL_cleanse(s, n);
+#else
+	memset(s, 0, n);
+	__asm__ __volatile__("" : : "r" (s) : "memory");
+#endif
+}
 
 static inline void *jent_zalloc(size_t len)
 {
@@ -318,13 +330,25 @@ static inline void *jent_zalloc(size_t len)
 		tmp = NULL;
 	}
 
-#elif defined(__linux__)
-#define CONFIG_CRYPTO_CPU_JITTERENTROPY_SECURE_MEMORY
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
 	tmp = malloc(len);
 	if (!tmp)
 		return NULL;
-	/* prevent paging out of the memory state to swap space */
+	/*
+	 * prevent paging out of the memory state to swap space
+	 * if this fails, check the current memory lock limits
+	 * and capabilities (e.g. RLIMIT_MEMLOCK and CAP_IPC_LOCK)
+	 */
+#ifndef JENT_CONF_RELAX_MLOCK
+#define CONFIG_CRYPTO_CPU_JITTERENTROPY_SECURE_MEMORY
+	if (mlock(tmp, len)) {
+#else
+	/*
+	 * use this only for CI or restricted containers if not possible
+	 * otherwise
+	 */
 	if (mlock(tmp, len) && errno != EPERM && errno != EAGAIN) {
+#endif
 		free(tmp);
 		return NULL;
 	}
@@ -338,21 +362,11 @@ static inline void *jent_zalloc(size_t len)
 #endif /* LIBGCRYPT */
 
 	if(NULL != tmp)
-		memset(tmp, 0, len);
+		jent_memset_secure(tmp, len);
 	return tmp;
 
 #undef JENT_IS_POWER_OF_2
 #undef JENT_BUILD_BUG_ON
-}
-
-static inline void jent_memset_secure(void *s, size_t n)
-{
-#if defined(AWSLC)
-	OPENSSL_cleanse(s, n);
-#else
-	memset(s, 0, n);
-	__asm__ __volatile__("" : : "r" (s) : "memory");
-#endif
 }
 
 static inline void jent_zfree(void *ptr, size_t len)
@@ -372,7 +386,7 @@ static inline void jent_zfree(void *ptr, size_t len)
 	OPENSSL_cleanse(ptr, len);
 	OPENSSL_secure_free(ptr);
 
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
 	/* while memory returned to the OS is automatically unlocked,
 	 * it is not known how long libc keeps this memory cached
 	 * internally therefore its more robust to nevertheless
@@ -399,10 +413,15 @@ static inline int jent_fips_enabled(void)
 #define FIPS_MODE_SWITCH_FILE "/proc/sys/crypto/fips_enabled"
 	char buf[2] = "0";
 	int fd = 0;
+	ssize_t rlen;
 
 	if ((fd = open(FIPS_MODE_SWITCH_FILE, O_RDONLY)) >= 0) {
-		while (read(fd, buf, sizeof(buf)) < 0 && errno == EINTR);
+		do {
+			rlen = read(fd, buf, sizeof(buf));
+		} while (rlen < 0 && errno == EINTR);
 		close(fd);
+		if (rlen <= 0)
+			return 0;
 	}
 	if (buf[0] == '1')
 		return 1;
@@ -458,11 +477,12 @@ static inline void jent_get_cachesize_sysfs(long *l1, long *l2, long *l3)
 	unsigned int i;
 	char buf[10], file[50];
 	int fd = 0;
+	ssize_t rlen;
 
 	/* Iterate over all caches */
 	for (i = 0; i < 4; i++) {
 		unsigned int shift = 0;
-		char *ext;
+		char *ext, *endptr;
 
 		/*
 		 * Check the cache type - we are only interested in Unified
@@ -474,8 +494,12 @@ static inline void jent_get_cachesize_sysfs(long *l1, long *l2, long *l3)
 		fd = open(file, O_RDONLY);
 		if (fd < 0)
 			continue;
-		while (read(fd, buf, sizeof(buf)) < 0 && errno == EINTR);
+		do {
+			rlen = read(fd, buf, sizeof(buf));
+		} while (rlen < 0 && errno == EINTR);
 		close(fd);
+		if (rlen <= 0)
+			continue;
 		buf[sizeof(buf) - 1] = '\0';
 
 		if (strncmp(buf, "Data", 4) && strncmp(buf, "Unified", 7))
@@ -489,8 +513,12 @@ static inline void jent_get_cachesize_sysfs(long *l1, long *l2, long *l3)
 		fd = open(file, O_RDONLY);
 		if (fd < 0)
 			continue;
-		while (read(fd, buf, sizeof(buf)) < 0 && errno == EINTR);
+		do {
+			rlen = read(fd, buf, sizeof(buf));
+		} while (rlen < 0 && errno == EINTR);
 		close(fd);
+		if (rlen <= 0)
+			continue;
 		buf[sizeof(buf) - 1] = '\0';
 
 		ext = strstr(buf, "K");
@@ -505,8 +533,9 @@ static inline void jent_get_cachesize_sysfs(long *l1, long *l2, long *l3)
 			}
 		}
 
-		val = strtol(buf, NULL, 10);
-		if (val == LONG_MAX)
+		errno = 0;
+		val = strtol(buf, &endptr, 10);
+		if (errno != 0 || endptr == buf || val <= 0 || val == LONG_MAX)
 			continue;
 		val <<= shift;
 
