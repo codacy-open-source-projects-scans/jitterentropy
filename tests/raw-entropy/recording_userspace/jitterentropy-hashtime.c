@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2019 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -17,6 +17,17 @@
  * DAMAGE.
  */
 
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
+/*
+ * jent_entropy_collector_alloc_raw() of the absorbed jitterentropy-base.c,
+ * for the recording of jitterentropy-record.c below.
+ */
+#define JENT_RAW_COLLECTOR
+
+#include <errno.h>
 #include <inttypes.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -32,179 +43,66 @@
 #include <unistd.h>
 #endif
 
+#ifdef __linux__
+#include <sched.h>	/* sched_setaffinity() for --cpu */
+#endif
+
+#ifdef __APPLE__
+#include <pthread.h>
+#include <sys/qos.h>		/* QoS classes for --e-cores and --p-cores */
+#include <sys/resource.h>	/* PRIO_DARWIN_PROCESS for --p-cores */
+#endif
+
+/*
+ * The atomic accessors of the process-wide state. Absorbed ahead of
+ * everything else because it depends on nothing else and nearly everything
+ * else depends on it - see arch/jitterentropy-arch-atomic.h.
+ */
+#include "jitterentropy-arch-atomic.c"
+
 #include "jitterentropy-sha3.c"
 #include "jitterentropy-gcd.c"
 #include "jitterentropy-health.c"
 #include "jitterentropy-noise.c"
 #include "jitterentropy-timer.c"
 #include "jitterentropy-base.c"
+#include "jitterentropy-uuid.c"
 #include "jitterentropy-status.c"
 
-#ifndef REPORT_COUNTER_TICKS
-#define REPORT_COUNTER_TICKS 1
-#endif
+#include "jitterentropy-arch-cache.c"
+#include "jitterentropy-arch-fips.c"
+#include "jitterentropy-arch-memory.c"
+#include "jitterentropy-arch-ncpu.c"
+#include "jitterentropy-arch-sched.c"
+#include "jitterentropy-arch-thread.c"
+#include "jitterentropy-arch-timer.c"
+#include "jitterentropy-arch-random.c"
 
-enum jent_es {
-	jent_common,		/* Common entropy source */
-	jent_hashloop,		/* SHA3 loop exclusively */
-	jent_memaccess_loop,	/* Memory access loop exclusively */
-};
+/* The recording itself, shared with libjitterentropy-record. */
+#define JENT_RECORD_STATIC_LIB
+#include "../recording_library/jitterentropy-record.c"
 
-/***************************************************************************
- * Statistical test logic not compiled for regular operation
- ***************************************************************************/
-static int jent_one_test(const char *pathname, unsigned long rounds,
-			 unsigned int flags, unsigned int osr,
-			 enum jent_es jent_es, unsigned int loopcnt,
-			 int report_counter_ticks,
-			 unsigned int status)
-{
-	unsigned long size = 0;
-	struct rand_data *ec = NULL;
-	uint64_t *duration;
-#ifdef JENT_TEST_BINARY_OUTPUT
-	size_t recordsWritten;
-#endif
-	unsigned int (*measure_jitter)(struct rand_data *ec,
-			               uint64_t loop_cnt,
-				       uint64_t *ret_current_delta);
+#include "jitterentropy-memlock.h"
+#include "jitterentropy-options.h"
 
-	FILE *out = NULL;
-	int ret = 0;
-	unsigned int health_test_result;
-
-	duration = calloc(rounds, sizeof(uint64_t));
-	if (!duration)
-		return 1;
-
-	/*
-	 * Do not perform the common startup check as the health test may
-	 * disable the Jitter RNG. However, as we are in test mode, we
-	 * *want* to also know about insufficient entropy.
-	 * Thus, only perform the cryptographic self tests and go on.
-	 */
-#if 0
-	ret = jent_entropy_init_ex(osr, flags);
-	if (ret) {
-		printf("The initialization failed with error code %d\n", ret);
-		goto out;
-	}
+/*
+ * --cpu where jent_record_run() can pin (JENT_HAVE_CPU_PINNING of
+ * jitterentropy-record.c), --e-cores and --p-cores where it can select a core
+ * type. Each is parsed everywhere, so that passing it yields the reason it is
+ * not honored rather than "unknown option".
+ */
+#ifdef JENT_HAVE_CPU_PINNING
+# define JENT_USAGE_CPU		"|--cpu <NUM>"
 #else
-	jent_entropy_init_common_pre();
+# define JENT_USAGE_CPU		""
 #endif
 
-	/*
-	 * Use the internal allocation to prevent checking and updating the
-	 * OSR, memory size or hash loop count.
-	 */
-	ec = jent_entropy_collector_alloc_internal(osr, flags);
-	if (!ec) {
-		ret = 1;
-		goto out;
-	}
-
-	/*
-	 * early exit, when status is requested. Can be used to
-	 * compare config of measurements with runtime
-	 */
-	if (status) {
-		char status_str[1000];
-
-		ret = jent_status(ec, status_str, sizeof(status_str));
-		if (ret) {
-			printf("Fetching jent status failed with code: %d\n", ret);
-			goto out;
-		}
-		printf("%s", status_str);
-		ret = 0;
-		goto out;
-	}
-
-	if (!report_counter_ticks) {
-		/*
-		 * For this analysis, we want the raw values, not values that
-		 * have had common factors removed.
-		 */
-		ec->jent_common_timer_gcd = 1;
-	}
-
-	if (ec->enable_notime) {
-		jent_notime_settick(ec);
-	}
-
-	/* Enable full SP800-90B health test handling */
-	ec->fips_enabled = 1;
-
-	printf("Processing %s\n", pathname);
-
-	out = fopen(pathname, "w");
-	if (!out) {
-		ret = 1;
-		goto out;
-	}
-
-	/* Print the size of the memory region. */
-#ifdef JENT_RANDOM_MEMACCESS
-	(void)jent_memaccess_deterministic;
-	printf("Random memory access - Memory size: %" PRIu32 " - Hashloop count: %" PRIu32 "\n",
-	       ec->memmask + 1, ec->hashloopcnt * JENT_HASH_LOOP_INIT);
+#ifdef __APPLE__
+# define JENT_USAGE_CORES	"|--e-cores|--p-cores"
 #else
-	(void)jent_memaccess_pseudorandom;
-	printf("Deterministic memory access - Memory size: %" PRIu32 " - Hashloop count: %" PRIu32 "\n",
-	       ec->memmask + 1, ec->hashloopcnt * JENT_HASH_LOOP_INIT);
+# define JENT_USAGE_CORES	""
 #endif
 
-	switch (jent_es) {
-	case jent_hashloop:
-		measure_jitter = jent_measure_jitter_ntg1_sha3;
-		break;
-	case jent_memaccess_loop:
-		measure_jitter = jent_measure_jitter_ntg1_memaccess;
-		break;
-	case jent_common:
-	default:
-		measure_jitter = jent_measure_jitter;
-		break;
-	}
-
-	/* Prime the test */
-	if (jent_es == jent_common)
-		jent_measure_jitter(ec, 0, NULL);
-	for (size = 0; size < rounds; size++) {
-		/* Disregard stuck indicator */
-		measure_jitter(ec, loopcnt, &duration[size]);
-	}
-
-#ifdef JENT_TEST_BINARY_OUTPUT
-	recordsWritten = fwrite(duration, sizeof(uint64_t), rounds, out);
-	if(recordsWritten != rounds) fprintf(stderr, "Can't output data.\n");
-	#else
-	for (size = 0; size < rounds; size++)
-		fprintf(out, "%" PRIu64 "\n", duration[size]);
-#endif
-
-	if ((health_test_result = jent_health_failure(ec))) {
-		printf("The main context encountered the following health testing failure(s):");
-		if (health_test_result & JENT_RCT_FAILURE) printf(" RCT");
-		if (health_test_result & JENT_APT_FAILURE) printf(" APT");
-		if (health_test_result & JENT_LAG_FAILURE) printf(" Lag");
-		printf("\n");
-	}
-
-out:
-	free(duration);
-
-	if (out)
-		fclose(out);
-
-	if (ec) {
-		/* checks internally if timer was used, maybe NOOP */
-		jent_notime_unsettick(ec);
-		jent_entropy_collector_free(ec);
-	}
-
-	return ret;
-}
 
 /*
  * Invoke the application.
@@ -218,7 +116,7 @@ out:
  * --ntg1 Enable flag JENT_NTG1
  * --force-fips Enable flag JENT_FORCE_FIPS
  * --disable-memory-access Enable flag JENT_DISABLE_MEMORY_ACCESS
- * --disable-internal-timer Enable flag JENT_FORCE_INTERNAL_TIMER
+ * --disable-internal-timer Enable flag JENT_DISABLE_INTERNAL_TIMER
  * --force-internal-timer Enable flag JENT_FORCE_INTERNAL_TIMER
  * --osr Apply the given OSR value
  * --loopcnt Apply the given loop count value for the operation (i.e. apply it
@@ -228,206 +126,114 @@ out:
  * --hashloop Perform the measurement of the hash loop only
  * --memaccess Perform the measurement of the memory access loop only
  * --hloopcnt Number of hashloop operations at runtime
+ * --cpu Pin the measurement to the given CPU - use this on hybrid CPUs to
+ *	 record one core type at a time (see jitterentropy-cpuinfo). Note that
+ *	 the internal timer cannot be used together with this option as its
+ *	 counting thread requires a CPU of its own.
+ * --e-cores Confine the measurement to the efficiency cores. macOS only, where
+ *	 there is no CPU pinning and the quality-of-service class of the thread
+ *	 is what selects a core type instead.
+ * --p-cores Ask for the performance cores - a preference, not a confinement.
+ *	 macOS only, and of use where the tool is started with a lower class
+ *	 than a shell command carries, which would otherwise take the recording
+ *	 onto the efficiency cores unnoticed.
+ *
+ * --cpu, --e-cores and --p-cores are mutually exclusive.
  */
 int main(int argc, char * argv[])
 {
-	const char *file;
-	unsigned long i, rounds, repeats;
-	unsigned int flags = 0, osr = 0, loopcnt = 0;
-	unsigned int status = 0;
-	enum jent_es jent_es = jent_common;
+	struct jent_record_config config = {
+		.cpu = -1,
+		.cores = JENT_RECORD_CORES_ANY,
+		.source = JENT_RECORD_COMMON,
+	};
+	unsigned long val;
 	int ret;
-	char pathname[4096];
+
+	/*
+	 * Absorbed with the library sources, and used by it in one
+	 * configuration of JENT_RANDOM_MEMACCESS or the other only.
+	 */
+	(void)jent_memaccess_deterministic;
+	(void)jent_memaccess_pseudorandom;
 
 	if (argc < 4) {
-		printf("%s <rounds per repeat> <number of repeats> <filename> [--ntg1|--force-fips|--disable-memory-access|--disable-internal-timer|--force-internal-timer|--osr <OSR>|--loopcnt <NUM>|--max-mem <NUM>|--hashloop|--memaccess|--all-caches|--hloopcnt <NUM>|--status]\n", argv[0]);
+		printf("%s <rounds per repeat> <number of repeats> <filename> [" JENT_OPTIONS_USAGE "|" JENT_OPTIONS_USAGE_OSR "|--loopcnt <NUM>|--hashloop|--memaccess" JENT_USAGE_CPU JENT_USAGE_CORES "|--status]\n", argv[0]);
 		return 1;
 	}
 
-	rounds = strtoul(argv[1], NULL, 10);
-	if (rounds >= UINT_MAX)
-		return 1;
-	argc--;
-	argv++;
+	{
+		char *endp;
 
-	repeats = strtoul(argv[1], NULL, 10);
-	if (repeats >= UINT_MAX)
-		return 1;
-	argc--;
-	argv++;
+		/*
+		 * Reject non-numeric input and zero: rounds feeds
+		 * calloc(rounds, ...), and calloc(0, ...) may legally return
+		 * NULL, which would be reported as an allocation failure (or
+		 * silently record empty data files).
+		 */
+		config.rounds = strtoul(argv[1], &endp, 10);
+		if (endp == argv[1] || *endp != '\0' ||
+		    config.rounds == 0 || config.rounds >= UINT_MAX) {
+			fprintf(stderr, "Invalid rounds value %s\n", argv[1]);
+			return 1;
+		}
+		argc--;
+		argv++;
 
-	file = argv[1];
+		config.repeats = strtoul(argv[1], &endp, 10);
+		if (endp == argv[1] || *endp != '\0' ||
+		    config.repeats == 0 || config.repeats >= UINT_MAX) {
+			fprintf(stderr, "Invalid repeats value %s\n", argv[1]);
+			return 1;
+		}
+		argc--;
+		argv++;
+	}
+
+	config.file = argv[1];
 	argc--;
 	argv++;
 
 	while (argc > 1) {
-		if (!strncmp(argv[1], "--ntg1", 6))
-			flags |= JENT_NTG1;
-		else if (!strncmp(argv[1], "--force-fips", 12))
-			flags |= JENT_FORCE_FIPS;
-		else if (!strncmp(argv[1], "--disable-memory-access", 23))
-			flags |= JENT_DISABLE_MEMORY_ACCESS;
-		else if (!strncmp(argv[1], "--disable-internal-timer", 24))
-			flags |= JENT_DISABLE_INTERNAL_TIMER;
-		else if (!strncmp(argv[1], "--force-internal-timer", 22))
-			flags |= JENT_FORCE_INTERNAL_TIMER;
-		else if (!strncmp(argv[1], "--all-caches", 12))
-			flags |= JENT_CACHE_ALL;
-		else if (!strncmp(argv[1], "--hashloop", 10))
-			jent_es |= jent_hashloop;
-		else if (!strncmp(argv[1], "--memaccess", 11))
-			jent_es |= jent_memaccess_loop;
-		else if (!strncmp(argv[1], "--osr", 5)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("OSR value missing\n");
-				return 1;
-			}
-
-			val = strtoul(argv[1], NULL, 10);
-			if (val >= UINT_MAX)
-				return 1;
-			osr = (unsigned int)val;
+		ret = jent_parse_option(&argc, &argv, &config.flags,
+					&config.osr);
+		if (ret < 0)
+			return 1;
+		if (ret > 0) {
+			/* One of the options all tools share. */
+		} else if (!strncmp(argv[1], "--hashloop", 10)) {
+			config.source = JENT_RECORD_HASHLOOP;
+		} else if (!strncmp(argv[1], "--memaccess", 11)) {
+			config.source = JENT_RECORD_MEMACCESS;
 		} else if (!strncmp(argv[1], "--loopcnt", 9)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("Loop count value missing\n");
+			if (jent_option_value(&argc, &argv, "Loop count", &val) ||
+			    val >= UINT_MAX)
+				return 1;
+			config.loopcnt = (unsigned int)val;
+		} else if (!strncmp(argv[1], "--cpu", 5)) {
+			if (jent_option_value(&argc, &argv, "CPU", &val))
+				return 1;
+			if (val > INT_MAX) {
+				fprintf(stderr, "Invalid CPU value %lu\n", val);
 				return 1;
 			}
-
-			val = strtoul(argv[1], NULL, 10);
-			if (val >= UINT_MAX)
-				return 1;
-			loopcnt = (unsigned int)val;
-		} else if (!strncmp(argv[1], "--max-mem", 9)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("Maximum memory value missing\n");
+			config.cpu = (int)val;
+		} else if (!strncmp(argv[1], "--e-cores", 9)) {
+			if (config.cores == JENT_RECORD_CORES_PERFORMANCE) {
+				printf("--cpu, --e-cores and --p-cores are mutually exclusive\n");
 				return 1;
 			}
-
-			val = strtoul(argv[1], NULL, 10);
-			switch (val) {
-			case 0:
-				/* Allow to set no option */
-				break;
-			case 1:
-				flags |= JENT_MAX_MEMSIZE_1kB;
-				break;
-			case 2:
-				flags |= JENT_MAX_MEMSIZE_2kB;
-				break;
-			case 3:
-				flags |= JENT_MAX_MEMSIZE_4kB;
-				break;
-			case 4:
-				flags |= JENT_MAX_MEMSIZE_8kB;
-				break;
-			case 5:
-				flags |= JENT_MAX_MEMSIZE_16kB;
-				break;
-			case 6:
-				flags |= JENT_MAX_MEMSIZE_32kB;
-				break;
-			case 7:
-				flags |= JENT_MAX_MEMSIZE_64kB;
-				break;
-			case 8:
-				flags |= JENT_MAX_MEMSIZE_128kB;
-				break;
-			case 9:
-				flags |= JENT_MAX_MEMSIZE_256kB;
-				break;
-			case 10:
-				flags |= JENT_MAX_MEMSIZE_512kB;
-				break;
-			case 11:
-				flags |= JENT_MAX_MEMSIZE_1MB;
-				break;
-			case 12:
-				flags |= JENT_MAX_MEMSIZE_2MB;
-				break;
-			case 13:
-				flags |= JENT_MAX_MEMSIZE_4MB;
-				break;
-			case 14:
-				flags |= JENT_MAX_MEMSIZE_8MB;
-				break;
-			case 15:
-				flags |= JENT_MAX_MEMSIZE_16MB;
-				break;
-			case 16:
-				flags |= JENT_MAX_MEMSIZE_32MB;
-				break;
-			case 17:
-				flags |= JENT_MAX_MEMSIZE_64MB;
-				break;
-			case 18:
-				flags |= JENT_MAX_MEMSIZE_128MB;
-				break;
-			case 19:
-				flags |= JENT_MAX_MEMSIZE_256MB;
-				break;
-			case 20:
-				flags |= JENT_MAX_MEMSIZE_512MB;
-				break;
-			default:
-				printf("Unknown maximum memory value\n");
+			config.cores = JENT_RECORD_CORES_EFFICIENCY;
+		} else if (!strncmp(argv[1], "--p-cores", 9)) {
+			if (config.cores == JENT_RECORD_CORES_EFFICIENCY) {
+				printf("--cpu, --e-cores and --p-cores are mutually exclusive\n");
 				return 1;
 			}
-		} else if (!strncmp(argv[1], "--hloopcnt", 10)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("Hash loop count value missing\n");
-				return 1;
-			}
-
-			val = strtoul(argv[1], NULL, 10);
-			switch (val) {
-			case 0:
-				flags |= JENT_HASHLOOP_1;
-				break;
-			case 1:
-				flags |= JENT_HASHLOOP_2;
-				break;
-			case 2:
-				flags |= JENT_HASHLOOP_4;
-				break;
-			case 3:
-				flags |= JENT_HASHLOOP_8;
-				break;
-			case 4:
-				flags |= JENT_HASHLOOP_16;
-				break;
-			case 5:
-				flags |= JENT_HASHLOOP_32;
-				break;
-			case 6:
-				flags |= JENT_HASHLOOP_64;
-				break;
-			case 7:
-				flags |= JENT_HASHLOOP_128;
-				break;
-			default:
-				printf("Unknown hashloop value\n");
-				return 1;
-			}
+			config.cores = JENT_RECORD_CORES_PERFORMANCE;
 		} else if (!strncmp(argv[1], "--status", 8)) {
-			status = 1;
+			config.status = 1;
 		} else {
-			printf("Unknown option %s\n", argv[1]);
+			fprintf(stderr, "Unknown option %s\n", argv[1]);
 			return 1;
 		}
 
@@ -435,19 +241,38 @@ int main(int argc, char * argv[])
 		argv++;
 	}
 
-	for (i = 1; i <= repeats; i++) {
-#if defined(JENT_TEST_BINARY_OUTPUT)
-		snprintf(pathname, sizeof(pathname), "%s-%.4lu-u64.bin", file, i);
-#else
-		snprintf(pathname, sizeof(pathname), "%s-%.4lu.data", file, i);
-#endif
+	/*
+	 * The compliance modes require the collector memory to be locked into
+	 * RAM, which the operating system permits only within a per-process
+	 * limit. Raised once here rather than per repeat, as the limit is
+	 * process-wide state. See jitterentropy-memlock.h.
+	 */
+	if (jent_raise_memlock_limit(config.flags))
+		fprintf(stderr,
+			"Cannot raise the memory lock limit, allocating the entropy collector may fail\n");
 
-		ret = jent_one_test(pathname, rounds, flags, osr, jent_es,
-				    loopcnt, REPORT_COUNTER_TICKS, status);
+	/*
+	 * Likewise the secure memory arena of the external crypto backends,
+	 * which is created once for the process and is what the library
+	 * allocates the collector from. See jitterentropy-memlock.h.
+	 */
+	if (jent_init_secure_memory(config.flags))
+		fprintf(stderr,
+			"Cannot create the secure memory arena, allocating the entropy collector will fail\n");
 
-		if (ret)
-			return ret;
+	/* What the tool prints, the recording reports. */
+	{
+		size_t len = jent_record_report_len(&config);
+		char *report = malloc(len);
+
+		if (!report) {
+			fprintf(stderr, "Cannot allocate the report\n");
+			return 1;
+		}
+		ret = jent_record_run(&config, report, len);
+		fputs(report, stdout);
+		free(report);
 	}
 
-	return 0;
+	return ret;
 }

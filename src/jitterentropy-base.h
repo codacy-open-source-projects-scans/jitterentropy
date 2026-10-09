@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -27,8 +27,11 @@ extern "C"
 {
 #endif
 
+JENT_INTERNAL
 int jent_time_entropy_init(unsigned int osr, unsigned int flags);
+JENT_INTERNAL
 uint32_t jent_memsize(unsigned int flags);
+JENT_INTERNAL
 unsigned int jent_hashloop_cnt(unsigned int flags);
 
 #ifdef __cplusplus

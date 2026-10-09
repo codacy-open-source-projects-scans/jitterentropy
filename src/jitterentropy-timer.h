@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -29,19 +29,36 @@ extern "C"
 
 #ifdef JENT_CONF_ENABLE_INTERNAL_TIMER
 
+JENT_INTERNAL
 void jent_notime_block_switch(void);
+JENT_INTERNAL
+int jent_notime_set_cpu(unsigned long cpu);
+JENT_INTERNAL
 int jent_notime_settick(struct rand_data *ec);
+JENT_INTERNAL
 void jent_notime_unsettick(struct rand_data *ec);
+JENT_INTERNAL
 void jent_get_nstime_internal(struct rand_data *ec, uint64_t *out);
+JENT_INTERNAL
 int jent_notime_enable(struct rand_data *ec, unsigned int flags);
+JENT_INTERNAL
 void jent_notime_disable(struct rand_data *ec);
+JENT_INTERNAL
 int jent_notime_switch(struct jent_notime_thread *new_thread);
+JENT_INTERNAL
 void jent_notime_force(void);
+JENT_INTERNAL
 int jent_notime_forced(void);
 
 #else /* JENT_CONF_ENABLE_INTERNAL_TIMER */
 
 static inline void jent_notime_block_switch(void) { }
+
+static inline int jent_notime_set_cpu(unsigned long cpu)
+{
+	(void)cpu;
+	return -EOPNOTSUPP;
+}
 
 static inline int jent_notime_settick(struct rand_data *ec)
 {
@@ -76,7 +93,7 @@ static inline void jent_notime_disable(struct rand_data *ec)
 static inline int jent_notime_switch(struct jent_notime_thread *new_thread)
 {
 	(void)new_thread;
-	return -1;
+	return -EOPNOTSUPP;
 }
 
 static inline void jent_notime_force(void) { }

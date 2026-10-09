@@ -1,6 +1,6 @@
 /* Jitter RNG: Keccak / SHA-3 / SHAKE / XDRBG Implementation
  *
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -20,6 +20,11 @@
 
 #include "jitterentropy-sha3.h"
 #include "jitterentropy-internal.h"
+
+/* As in jitterentropy-base.c: the entropy core must not be optimized. */
+#ifdef __OPTIMIZE__
+ #error "The CPU Jitter random number generator must not be compiled with optimizations. See documentation. Use the compiler switch -O0 for compiling the entropy core."
+#endif
 
 /***************************************************************************
  * Message Digest Implementation
@@ -54,9 +59,14 @@ static inline void le64_to_ptr(uint8_t *p, const uint64_t value)
 	le32_to_ptr(p,     (uint32_t)(value));
 }
 
+static inline uint64_t jent_rol64(uint64_t x, unsigned int n)
+{
+	return ( (x << (n&(64-1))) | (x >> ((64-n)&(64-1))) );
+}
+
 /*********************************** Keccak ***********************************/
 /* state[x + y*5] */
-#define A(x, y) (x + 5 * y)
+#define A(x, y) ((x) + 5 * (y))
 
 static inline void jent_keccakp_theta(uint64_t s[25])
 {
@@ -70,11 +80,11 @@ static inline void jent_keccakp_theta(uint64_t s[25])
 	C[4] = s[A(4, 0)] ^ s[A(4, 1)] ^ s[A(4, 2)] ^ s[A(4, 3)] ^ s[A(4, 4)];
 
 	/* Step 2 */
-	D[0] = C[4] ^ rol64(C[1], 1);
-	D[1] = C[0] ^ rol64(C[2], 1);
-	D[2] = C[1] ^ rol64(C[3], 1);
-	D[3] = C[2] ^ rol64(C[4], 1);
-	D[4] = C[3] ^ rol64(C[0], 1);
+	D[0] = C[4] ^ jent_rol64(C[1], 1);
+	D[1] = C[0] ^ jent_rol64(C[2], 1);
+	D[2] = C[1] ^ jent_rol64(C[3], 1);
+	D[3] = C[2] ^ jent_rol64(C[4], 1);
+	D[4] = C[3] ^ jent_rol64(C[0], 1);
 
 	/* Step 3 */
 	s[A(0, 0)] ^= D[0];
@@ -113,32 +123,32 @@ static inline void jent_keccakp_rho(uint64_t s[25])
 	/* Step 1 */
 	/* s[A(0, 0)] = s[A(0, 0)]; */
 
-#define RHO_ROL(t)	(((t + 1) * (t + 2) / 2) % 64)
+#define RHO_ROL(t)	((((t) + 1) * ((t) + 2) / 2) % 64)
 	/* Step 3 */
-	s[A(1, 0)] = rol64(s[A(1, 0)], RHO_ROL(0));
-	s[A(0, 2)] = rol64(s[A(0, 2)], RHO_ROL(1));
-	s[A(2, 1)] = rol64(s[A(2, 1)], RHO_ROL(2));
-	s[A(1, 2)] = rol64(s[A(1, 2)], RHO_ROL(3));
-	s[A(2, 3)] = rol64(s[A(2, 3)], RHO_ROL(4));
-	s[A(3, 3)] = rol64(s[A(3, 3)], RHO_ROL(5));
-	s[A(3, 0)] = rol64(s[A(3, 0)], RHO_ROL(6));
-	s[A(0, 1)] = rol64(s[A(0, 1)], RHO_ROL(7));
-	s[A(1, 3)] = rol64(s[A(1, 3)], RHO_ROL(8));
-	s[A(3, 1)] = rol64(s[A(3, 1)], RHO_ROL(9));
-	s[A(1, 4)] = rol64(s[A(1, 4)], RHO_ROL(10));
-	s[A(4, 4)] = rol64(s[A(4, 4)], RHO_ROL(11));
-	s[A(4, 0)] = rol64(s[A(4, 0)], RHO_ROL(12));
-	s[A(0, 3)] = rol64(s[A(0, 3)], RHO_ROL(13));
-	s[A(3, 4)] = rol64(s[A(3, 4)], RHO_ROL(14));
-	s[A(4, 3)] = rol64(s[A(4, 3)], RHO_ROL(15));
-	s[A(3, 2)] = rol64(s[A(3, 2)], RHO_ROL(16));
-	s[A(2, 2)] = rol64(s[A(2, 2)], RHO_ROL(17));
-	s[A(2, 0)] = rol64(s[A(2, 0)], RHO_ROL(18));
-	s[A(0, 4)] = rol64(s[A(0, 4)], RHO_ROL(19));
-	s[A(4, 2)] = rol64(s[A(4, 2)], RHO_ROL(20));
-	s[A(2, 4)] = rol64(s[A(2, 4)], RHO_ROL(21));
-	s[A(4, 1)] = rol64(s[A(4, 1)], RHO_ROL(22));
-	s[A(1, 1)] = rol64(s[A(1, 1)], RHO_ROL(23));
+	s[A(1, 0)] = jent_rol64(s[A(1, 0)], RHO_ROL(0));
+	s[A(0, 2)] = jent_rol64(s[A(0, 2)], RHO_ROL(1));
+	s[A(2, 1)] = jent_rol64(s[A(2, 1)], RHO_ROL(2));
+	s[A(1, 2)] = jent_rol64(s[A(1, 2)], RHO_ROL(3));
+	s[A(2, 3)] = jent_rol64(s[A(2, 3)], RHO_ROL(4));
+	s[A(3, 3)] = jent_rol64(s[A(3, 3)], RHO_ROL(5));
+	s[A(3, 0)] = jent_rol64(s[A(3, 0)], RHO_ROL(6));
+	s[A(0, 1)] = jent_rol64(s[A(0, 1)], RHO_ROL(7));
+	s[A(1, 3)] = jent_rol64(s[A(1, 3)], RHO_ROL(8));
+	s[A(3, 1)] = jent_rol64(s[A(3, 1)], RHO_ROL(9));
+	s[A(1, 4)] = jent_rol64(s[A(1, 4)], RHO_ROL(10));
+	s[A(4, 4)] = jent_rol64(s[A(4, 4)], RHO_ROL(11));
+	s[A(4, 0)] = jent_rol64(s[A(4, 0)], RHO_ROL(12));
+	s[A(0, 3)] = jent_rol64(s[A(0, 3)], RHO_ROL(13));
+	s[A(3, 4)] = jent_rol64(s[A(3, 4)], RHO_ROL(14));
+	s[A(4, 3)] = jent_rol64(s[A(4, 3)], RHO_ROL(15));
+	s[A(3, 2)] = jent_rol64(s[A(3, 2)], RHO_ROL(16));
+	s[A(2, 2)] = jent_rol64(s[A(2, 2)], RHO_ROL(17));
+	s[A(2, 0)] = jent_rol64(s[A(2, 0)], RHO_ROL(18));
+	s[A(0, 4)] = jent_rol64(s[A(0, 4)], RHO_ROL(19));
+	s[A(4, 2)] = jent_rol64(s[A(4, 2)], RHO_ROL(20));
+	s[A(2, 4)] = jent_rol64(s[A(2, 4)], RHO_ROL(21));
+	s[A(4, 1)] = jent_rol64(s[A(4, 1)], RHO_ROL(22));
+	s[A(1, 1)] = jent_rol64(s[A(1, 1)], RHO_ROL(23));
 }
 
 static inline void jent_keccakp_pi(uint64_t s[25])
@@ -366,31 +376,11 @@ void jent_sha3_final(struct jent_sha_ctx *ctx, uint8_t *digest)
 	 *
 	 * * the requested digest size must be multiples of uint64_t
 	 */
-	for (i = 0; i < ctx->digestsize / 8; i++, digest += 8)
+	for (i = 0; i < (unsigned int)ctx->digestsize / 8; i++, digest += 8)
 		le64_to_ptr(digest, ctx->state[i]);
 
 	memset(ctx->partial, 0, ctx->r);
 	jent_sha3_init(ctx);
-}
-
-int jent_sha3_alloc(void **hash_state)
-{
-	struct sha_ctx *tmp;
-
-	tmp = jent_zalloc(JENT_SHA_MAX_CTX_SIZE);
-	if (!tmp)
-		return 1;
-
-	*hash_state = tmp;
-
-	return 0;
-}
-
-void jent_sha3_dealloc(void *hash_state)
-{
-	struct sha_ctx *ctx = (struct sha_ctx *)hash_state;
-
-	jent_zfree(ctx, JENT_SHA_MAX_CTX_SIZE);
 }
 
 /*********************************** XDRBG ************************************/
@@ -411,24 +401,23 @@ static void jent_xdrbg256_generate_block(struct jent_sha_ctx *ctx, uint8_t *dst,
 	 * XDRBG:
 	 * 512 Bit for next state (internal memory) || 256 Bit output for user
 	 */
-	uint8_t jent_block_next_state[JENT_XDRBG_SIZE_STATE +
-				      JENT_SHA3_256_SIZE_DIGEST];
+	uint8_t *jent_block_next_state = ctx->xdrbg_block;
 	uint8_t encode;
 
 	/* Checking the output size */
-	BUILD_BUG_ON(JENT_SHA3_256_SIZE_DIGEST != ((DATA_SIZE_BITS / 8)));
+	JENT_BUILD_BUG_ON(JENT_SHA3_256_SIZE_DIGEST != ((DATA_SIZE_BITS / 8)));
 	/*
 	 * The XOF implementation only allows the generation of up to one
 	 * rate-size block. See the comments in the squeeze operation for
 	 * details
 	 */
-	BUILD_BUG_ON(JENT_SHA3_256_SIZE_BLOCK < sizeof(jent_block_next_state));
+	JENT_BUILD_BUG_ON(JENT_SHA3_256_SIZE_BLOCK < sizeof(ctx->xdrbg_block));
 	/*
 	 * The squeeze operation is limited to return multiples of uint64_t -
 	 * verify all set_digestsize values.
 	 */
-	BUILD_BUG_ON(JENT_XDRBG_SIZE_STATE % sizeof(uint64_t));
-	BUILD_BUG_ON(sizeof(jent_block_next_state) % sizeof(uint64_t));
+	JENT_BUILD_BUG_ON(JENT_XDRBG_SIZE_STATE % sizeof(uint64_t));
+	JENT_BUILD_BUG_ON(sizeof(ctx->xdrbg_block) % sizeof(uint64_t));
 
 	/* The final operation automatically re-initializes the ->hash_state */
 
@@ -467,7 +456,7 @@ static void jent_xdrbg256_generate_block(struct jent_sha_ctx *ctx, uint8_t *dst,
 	 * Request a full block irrespective of the output size due to
 	 * Keccak squeeze implementation limitation.
 	 */
-	jent_shake256_set_digestsize(ctx, sizeof(jent_block_next_state));
+	jent_shake256_set_digestsize(ctx, sizeof(ctx->xdrbg_block));
 	jent_sha3_final(ctx, jent_block_next_state);
 
 	/* Return Σ to the caller truncated to the requested size */
@@ -486,7 +475,7 @@ static void jent_xdrbg256_generate_block(struct jent_sha_ctx *ctx, uint8_t *dst,
 	 */
 	jent_sha3_update(ctx, jent_block_next_state, JENT_XDRBG_SIZE_STATE);
 	jent_memset_secure(jent_block_next_state,
-			   sizeof(jent_block_next_state));
+			   sizeof(ctx->xdrbg_block));
 }
 
 void jent_drbg_generate_block(struct jent_sha_ctx *ctx, uint8_t *dst,
@@ -499,12 +488,10 @@ void jent_drbg_generate_block(struct jent_sha_ctx *ctx, uint8_t *dst,
 
 /*
  * The SHAKE-256 support is only needed to support the XDRBG. Therefore, it is
- * implicitly self-tested with the XDRBG-256 self test. Yet, this self-test
- * code for SHAKE-256 is left in here to allow implementors to activate it at
- * their discretion. Furthermore it provides an example how to invoke the
- * Keccak operation as a SHAKE-256 for testing and analysis.
+ * implicitly self-tested with the XDRBG-256 self test. Yet, it is tested on its
+ * own to report a fault in the XOF as such. Furthermore it provides an example
+ * how to invoke the Keccak operation as a SHAKE-256 for testing and analysis.
  */
-#if 0
 static int jent_shake256_tester(void)
 {
 	HASH_CTX_ON_STACK(ctx);
@@ -517,7 +504,7 @@ static int jent_shake256_tester(void)
 				       0x9d, 0x0e, 0xca, 0xf5, 0x38, 0x30, 0xa1,
 				       0x92, 0x87, 0xe0, 0xb3, 0x6e, 0xce, 0x48,
 				       0x82, 0xeb, 0x58, 0x0b, 0x78, 0x5c, 0x1d,
-				       0xef, 0x2d, 0xe5, 0xaa, 0x6c };
+				       0xef, 0x2d, 0xe5, 0xaa };
 	uint8_t act[sizeof(exp)] = { 0 };
 	unsigned int i;
 
@@ -533,7 +520,6 @@ static int jent_shake256_tester(void)
 
 	return 0;
 }
-#endif
 
 static int jent_xdrbg256_tester(void)
 {
@@ -553,7 +539,7 @@ static int jent_xdrbg256_tester(void)
 	uint8_t act[sizeof(exp)] = { 0 };
 	unsigned int i;
 
-	BUILD_BUG_ON(JENT_SHA3_256_SIZE_DIGEST != sizeof(exp));
+	JENT_BUILD_BUG_ON(JENT_SHA3_256_SIZE_DIGEST != sizeof(exp));
 
 	jent_shake256_init(&ctx);
 	/* Initial seed */
@@ -573,6 +559,7 @@ static int jent_xdrbg256_tester(void)
 
 static int jent_sha3_256_tester(void)
 {
+#if 0
 	HASH_CTX_ON_STACK(ctx);
 	static const uint8_t msg[] = { 0x5E, 0x5E, 0xD6 };
 	static const uint8_t exp[] = {
@@ -592,6 +579,43 @@ static int jent_sha3_256_tester(void)
 		if (exp[i] != act[i])
 			return 1;
 	}
+#endif
+	return 0;
+}
+
+/*
+ * The collector's state absorbs far more than one block, in pieces of any
+ * length. Absorbing in three updates - 1, 140 and 300 bytes - takes the
+ * paths a short message never reaches: completing a partially filled block,
+ * and absorbing whole blocks of JENT_SHA3_256_SIZE_BLOCK bytes directly.
+ * The message is the concatenation of the first 1, 140 and 300 bytes of the
+ * sequence 0x00, 0x01, ..., 0xff, 0x00, ...
+ */
+static int jent_sha3_256_multiblock_tester(void)
+{
+	HASH_CTX_ON_STACK(ctx);
+	static const unsigned int chunks[] = { 1, 140, 300 };
+	static const uint8_t exp[] = {
+		0xC5, 0xE3, 0x16, 0x92, 0x0A, 0x0D, 0x7E, 0x5D, 0x6C, 0x84,
+		0x4C, 0x52, 0x9C, 0xA8, 0x82, 0x18, 0x8A, 0xB2, 0x29, 0x9D,
+		0xA5, 0xED, 0x65, 0x0D, 0xC6, 0x16, 0xF0, 0xD4, 0xA3, 0x72,
+		0x2E, 0x02
+	};
+	uint8_t msg[300], act[sizeof(exp)] = { 0 };
+	unsigned int i;
+
+	for (i = 0; i < sizeof(msg); i++)
+		msg[i] = (uint8_t)i;
+
+	jent_sha3_256_init(&ctx);
+	for (i = 0; i < sizeof(chunks) / sizeof(chunks[0]); i++)
+		jent_sha3_update(&ctx, msg, chunks[i]);
+	jent_sha3_final(&ctx, act);
+
+	for (i = 0; i < sizeof(exp); i++) {
+		if (exp[i] != act[i])
+			return 1;
+	}
 
 	return 0;
 }
@@ -599,6 +623,10 @@ static int jent_sha3_256_tester(void)
 int jent_sha3_tester(void)
 {
 	if (jent_sha3_256_tester())
+		return 1;
+	if (jent_sha3_256_multiblock_tester())
+		return 1;
+	if (jent_shake256_tester())
 		return 1;
 	return jent_xdrbg256_tester();
 }

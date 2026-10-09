@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -27,7 +27,9 @@ extern "C"
 {
 #endif
 
+JENT_INTERNAL
 void jent_health_cb_block_switch(void);
+JENT_INTERNAL
 int jent_set_fips_failure_callback_internal(jent_fips_failure_cb cb);
 
 static inline uint64_t jent_delta(uint64_t prev, uint64_t next)
@@ -65,25 +67,64 @@ static inline uint64_t jent_delta_abs(uint64_t prev, uint64_t next)
 * section 4.4.1) starts with zero (see jent_health_init(), jent_rct_insert()).
 * Hence we need to subtract one from the cutoff value as calculated following
 * SP800-90B. Thus C = ceil(-log_2(alpha)/H) = 30*osr or 60*osr.
+*
+* tests/health/cutoffs.py --check compares these two multipliers, and the
+* NTG.1 division jent_rct_init() applies to them, against that formula.
 */
 /* RCT: Intermittent cutoff threshold for alpha = 2**-30 */
 #define JENT_HEALTH_RCT_INTERMITTENT_CUTOFF(x) ((x) * 30)
 /* RCT: permanent cutoff threshold for alpha = 2**-60 */
 #define JENT_HEALTH_RCT_PERMANENT_CUTOFF(x) ((x) * 60)
 
+JENT_INTERNAL
 void jent_lag_duplicate(struct rand_data *new_ec, struct rand_data *old_ec);
+JENT_INTERNAL
 void jent_apt_duplicate(struct rand_data *new_ec, struct rand_data *old_ec);
+JENT_INTERNAL
 void jent_rct_duplicate(struct rand_data *new_ec);
+JENT_INTERNAL
 void jent_rct_mem_duplicate(struct rand_data *new_ec, struct rand_data *old_ec);
+JENT_INTERNAL
+void jent_health_duplicate(struct rand_data *new_ec, struct rand_data *old_ec);
+/*
+ * The deltas the stuck test takes as its reference from a new noise source of
+ * the startup, rather than judging them against the last source's.
+ */
+#define JENT_STUCK_PRIME	2
+JENT_INTERNAL
 unsigned int jent_stuck(struct rand_data *ec, uint64_t current_delta);
+/*
+ * Insert an externally obtained time stamp into the health tests of @ec: the
+ * delta against the previous stamp is formed as the noise source forms it and
+ * every health test is run on it. The verdict is read back with
+ * jent_health_failure(); the return value says whether the measurement was
+ * stuck.
+ *
+ * This judges time stamps the library did not measure itself - a raw entropy
+ * recording replayed through the very tests that judge the noise source at
+ * runtime, as tests/health does - reaching the same verdict because it is the
+ * same code. It produces no entropy. Internal, like everything in this header.
+ *
+ * The collector must be one dedicated to this, as the call advances the health
+ * test state, and the tests only report in FIPS mode. The first stamp is a
+ * delta against whatever the collector last measured, so a replay should
+ * discard its first result or insert the first stamp twice.
+ */
+JENT_INTERNAL
+unsigned int jent_health_insert_timestamp(struct rand_data *ec,
+					  uint64_t timestamp);
+JENT_INTERNAL
+unsigned int jent_health_failure_query(const struct rand_data *ec);
+JENT_INTERNAL
 unsigned int jent_health_failure(struct rand_data *ec);
 
 enum jent_health_init_type {
 	jent_health_init_type_common,
 	jent_health_init_type_ntg1,
 };
-void jent_health_init(struct rand_data *ec,
-		      enum jent_health_init_type inittype);
+JENT_INTERNAL
+int jent_health_init(struct rand_data *ec,
+		     enum jent_health_init_type inittype);
 
 #ifdef __cplusplus
 }

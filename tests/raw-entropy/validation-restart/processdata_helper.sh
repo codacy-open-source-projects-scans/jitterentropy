@@ -1,8 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Process the entropy data
 
-if [ -z "$NONIID_DATA" ]
+# The extraction and analysis tools are invoked in pipelines with tee for
+# logging; without pipefail their failures would be masked by tee's exit code.
+set -euxo pipefail
+
+if [ -z "${NONIID_DATA:-}" ]
 then
 	echo "This script cannot be called by itself."
 	exit 1
@@ -16,7 +20,7 @@ fi
 LOGFILE="$RESULTS_DIR/processdata.log"
 
 # point to the min entropy tool
-EATOOL="../../SP800-90B_EntropyAssessment/cpp/ea_restart"
+EATOOL=${EATOOL:-"../../SP800-90B_EntropyAssessment/cpp/ea_restart"}
 
 # specify if you want to compile the extractlsb program in this script
 BUILD_EXTRACT=${BUILD_EXTRACT:-"yes"}
@@ -36,8 +40,8 @@ MASK_LIST="FF:8"
 # List used for ARM Cortext A9 and A7 processors
 #MASK_LIST="FF:4,8 7F8:4,8"
 
-# Maximum number of entries to be extracted from the original file
-MAX_EVENTS=1000000
+# Maximum number of entries taken from each restart file
+MAX_EVENTS=1000
 
 ############################################################
 # Code only after this line -- do not change               #
@@ -46,10 +50,10 @@ MAX_EVENTS=1000000
 #############################
 # Preparation
 #############################
+
 INPUTCONSOLIDATED="$RESULTS_DIR/jent-raw-noise-restart-consolidated.data"
 
 EXTRACT="extractlsb"
-CFILE="extractlsb.c"
 
 if [ ! -d $ENTROPYDATA_DIR ]
 then
@@ -59,24 +63,22 @@ fi
 
 if [ ! -d $RESULTS_DIR ]
 then
-	mkdir $RESULTS_DIR
-	if [ $? -ne 0 ]
+	if ! mkdir $RESULTS_DIR
 	then
 		echo "Directory for results $RESULTS_DIR cannot be created"
 		exit 1
 	fi
 fi
 
-if [ ! -f $EA_TOOL ]
+if [ ! -f "$EATOOL" ]
 then
-	echo "ERROR: Path of Entropy Data tool $EA_TOOL is missing"
+	echo "ERROR: Path of Entropy Data tool $EATOOL is missing"
 	exit 1
 fi
 
 
 trap "if [ "$BUILD_EXTRACT" = "yes" ]; then make clean; fi" 0 1 2 3 15
 
-rm -f $EXEC
 if [ "$BUILD_EXTRACT" = "yes" ]
 then
 	echo "Building $EXTRACT ..."
@@ -96,13 +98,29 @@ fi
 #
 # Step 1: Concatenate all individual restart files into single file
 #
-rm -f $INPUTCONSOLIDATED
+# Also remove bit output files of a previous (possibly interrupted) run:
+# extractlsb creates them with O_EXCL and would fail on existing files,
+# leaving the stale data to be analyzed in step 3.
+#
+# The cap applies per restart: on the consolidated file it would keep only
+# the first restart, not the matrix of restarts ea_restart needs.
+rm -f $INPUTCONSOLIDATED $RESULTS_DIR/*bitout.data
+restarts=0
 for i in $NONIID_DATA
 do
+	# the pattern itself when nothing matches
+	[ -f "$i" ] || continue
 	echo "Process recorded entropy data $i"
 
-	cat $i >> $INPUTCONSOLIDATED
+	head -n $MAX_EVENTS $i >> $INPUTCONSOLIDATED
+	restarts=$((restarts + 1))
 done
+
+if [ "$restarts" -eq 0 ]
+then
+	echo "ERROR: No raw entropy data $NONIID_DATA" | tee -a $LOGFILE
+	exit 1
+fi
 
 #
 # Step 2: extract data
@@ -117,7 +135,11 @@ do
 		mask=${item%:*}
 		bits=${item#*:}
 
-		./$EXTRACT $file $filepath.${mask}bitout.data $MAX_EVENTS $mask 2>&1 | tee -a $LOGFILE
+		if ! ./$EXTRACT $file $filepath.${mask}bitout.data $((MAX_EVENTS * restarts)) $mask 2>&1 | tee -a $LOGFILE
+		then
+			echo "ERROR: Extraction of $file (mask $mask) failed" | tee -a $LOGFILE
+			exit 1
+		fi
 	done
 done
 
@@ -150,7 +172,14 @@ do
 			if [ ! -f $outfile ]
 			then
 				echo "Analyzing entropy for $infile ${bits}-bit single" | tee -a $LOGFILE
-				$EATOOL -n -v $infile ${bits} 0.333 > $outfile
+				if ! $EATOOL -n -v $infile ${bits} 0.333 > $outfile
+				then
+					echo "ERROR: Entropy analysis of $infile (${bits} bits) failed" | tee -a $LOGFILE
+					# do not leave a partial result behind that
+					# would be skipped as complete on a re-run
+					rm -f $outfile
+					exit 1
+				fi
 			else
 				echo "File $outfile already generated"
 			fi

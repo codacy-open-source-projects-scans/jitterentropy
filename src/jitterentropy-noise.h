@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -27,16 +27,38 @@ extern "C"
 {
 #endif
 
+/*
+ * Each measurement mixes its time delta into the entropy pool and, with
+ * @health, runs the health tests on it. Returns the stuck test result, 0
+ * without @health. A call with @health 0 takes a time stamp without a delta
+ * that is not one of the measurement reaching the health tests.
+ *
+ * One measurement of the memory access noise source alone, for the first
+ * FIPS / NTG.1 startup stage.
+ */
+JENT_INTERNAL
 unsigned int jent_measure_jitter_ntg1_memaccess(struct rand_data *ec,
 						uint64_t loop_cnt,
-						uint64_t *ret_current_delta);
+						uint64_t *ret_current_delta,
+						int health);
+/* The same for the hash loop noise source, the second startup stage. */
+JENT_INTERNAL
 unsigned int jent_measure_jitter_ntg1_sha3(struct rand_data *ec,
 					   uint64_t loop_cnt,
-					   uint64_t *ret_current_delta);
+					   uint64_t *ret_current_delta,
+					   int health);
+/*
+ * One measurement of both noise sources; ->prev_time must be primed, which
+ * a call with @health 0 does.
+ */
+JENT_INTERNAL
 unsigned int jent_measure_jitter(struct rand_data *ec,
 				 uint64_t loop_cnt,
-				 uint64_t *ret_current_delta);
+				 uint64_t *ret_current_delta,
+				 int health);
+JENT_INTERNAL
 void jent_random_data(struct rand_data *ec);
+JENT_INTERNAL
 void jent_read_random_block(struct rand_data *ec, char *dst, size_t dst_len);
 
 #ifdef __cplusplus

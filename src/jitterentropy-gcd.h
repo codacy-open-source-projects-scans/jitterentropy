@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -27,16 +27,29 @@ extern "C"
 {
 #endif
 
-JENT_PRIVATE_STATIC
-int jent_gcd_analyze(uint64_t *delta_history, size_t nelem, size_t osr);
-JENT_PRIVATE_STATIC
-uint64_t *jent_gcd_init(size_t nelem);
-JENT_PRIVATE_STATIC
+/* The clocks a delta history can come from, each with its own divisor. */
+#define JENT_GCD_CLOCK_PLATFORM	0	/* jent_get_nstime() */
+#define JENT_GCD_CLOCK_NOTIME	1	/* the internal timer */
+#define JENT_GCD_CLOCKS		2
+
+/* Internal: JENT_INTERNAL, not JENT_PRIVATE_STATIC, which would export them. */
+JENT_INTERNAL
+int jent_gcd_analyze(uint64_t *delta_history, size_t nelem, size_t osr,
+		     unsigned int notime);
+/* jent_gcd_analyze() split, to store the divisor only after further checks. */
+JENT_INTERNAL
+int jent_gcd_verdict(uint64_t *delta_history, size_t nelem, size_t osr,
+		     uint64_t *gcd);
+JENT_INTERNAL
+void jent_gcd_store(uint64_t gcd, unsigned int notime);
+JENT_INTERNAL
+uint64_t *jent_gcd_init(size_t nelem, unsigned int flags);
+JENT_INTERNAL
 void jent_gcd_fini(uint64_t *delta_history, size_t nelem);
-JENT_PRIVATE_STATIC
-int jent_gcd_get(uint64_t *value);
-JENT_PRIVATE_STATIC
-int jent_gcd_selftest(void);
+JENT_INTERNAL
+int jent_gcd_get(uint64_t *value, unsigned int notime);
+JENT_INTERNAL
+int jent_gcd_selftest(unsigned int flags);
 
 /* Watch for common adjacent GCD values */
 #define jent_gcd_add_value(delta_history, delta, idx)			\

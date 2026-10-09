@@ -1,6 +1,8 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Process the entropy data
+
+set -euxo pipefail
 
 ############################################################
 # Configuration values common                              #

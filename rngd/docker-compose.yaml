@@ -1,0 +1,13 @@
+name: jitterentropy
+
+services:
+    rngd:
+        build:
+            context: ..
+            dockerfile: rngd/Dockerfile
+        cap_add:
+            - SYS_ADMIN
+        cap_drop:
+            - ALL
+        network_mode: none
+        restart: always

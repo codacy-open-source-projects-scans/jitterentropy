@@ -1,14 +1,16 @@
-#!/bin/sh
+#!/usr/bin/env bash
+
+set -euxo pipefail
 
 # Directory where to store the measurements
 OUTDIR=${OUTDIR:-"../results-measurements"}
 
 # Maximum number of entries to be extracted from the original file
-NUM_EVENTS=1000000
+NUM_EVENTS=${NUM_EVENTS:-1000000}
 
 # Number of restart tests
-NUM_EVENTS_RESTART=1000
-NUM_RESTART=1000
+NUM_EVENTS_RESTART=${NUM_EVENTS_RESTART:-1000}
+NUM_RESTART=${NUM_RESTART:-1000}
 
 NONIID_RESTART_DATA="jent-raw-noise-restart"
 NONIID_DATA="jent-raw-noise"
@@ -35,8 +37,7 @@ initialization()
 {
 	if [ ! -d $OUTDIR ]
 	then
-		mkdir $OUTDIR
-		if [ $? -ne 0 ]
+		if ! mkdir $OUTDIR
 		then
 			echo "Creation of $OUTDIR failed"
 			exit 1

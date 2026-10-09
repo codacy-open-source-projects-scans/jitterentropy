@@ -1,13 +1,15 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Process the entropy data
+
+set -euxo pipefail
 
 ############################################################
 # Configuration values                                     #
 ############################################################
 
-ENTROPYDATA_DIR=$1
-RESULTS_DIR=$2
+ENTROPYDATA_DIR=${1:-}
+RESULTS_DIR=${2:-}
 
 if [ -n "$RESULTS_DIR" ]
 then
@@ -17,11 +19,17 @@ fi
 ENTROPYDATA_DIR=${ENTROPYDATA_DIR:-"../results-measurements"}
 RESULTS_DIR=${RESULTS_DIR:-"../results-analysis-runtime"}
 
-NONIID_DATA="$(for i in $ENTROPYDATA_DIR/jent*; do basename $i; done)"
+NONIID_DATA="$(for i in $ENTROPYDATA_DIR/jent-raw-noise_hashloop_*; do basename $i; done)"
 
 ############################################################
 # Code only after this line -- do not change               #
 ############################################################
+
+diagrammain='Hash Loop Entropy Rate'
+if [ -f $ENTROPYDATA_DIR/jent-commonop-testing ]
+then
+	diagrammain='Jitter RNG Entropy Rate'
+fi
 
 . ./processdata_helper.sh
 
@@ -32,7 +40,7 @@ min_pair_deterministic=""
 min_triple_deterministic=""
 while [ $size -le 7 ]
 do
-	det=$(grep H_original $RESULTS_DIR/jent-raw-noise_hashloop_${size}-0001.minentropy_FF_8bits.txt | grep min | cut -f2 -d":")
+	det=$(grep H_original $RESULTS_DIR/jent-raw-noise_hashloop_${size}-0001.minentropy_*_8bits.txt | grep min | cut -f2 -d":")
 
 	tmp_det=$(Rscript --vanilla processdata_minentropy.r $ENTROPYDATA_DIR/jent-raw-noise_hashloop_${size}-0001.data 2>/dev/null| cut -d " " -f 2)
 
@@ -68,4 +76,4 @@ echo $deterministic > $RESULTS_DIR/minentropy_collected_hashloop
 echo $min_deterministic >> $RESULTS_DIR/minentropy_collected_hashloop
 echo $min_pair_deterministic >> $RESULTS_DIR/minentropy_collected_hashloop
 echo $min_triple_deterministic >> $RESULTS_DIR/minentropy_collected_hashloop
-Rscript --vanilla processdata_hashloop.r $RESULTS_DIR/minentropy_collected_hashloop
+Rscript --vanilla processdata_hashloop.r "$diagrammain" $RESULTS_DIR/minentropy_collected_hashloop

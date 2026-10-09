@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # This test is intended to analyze the memory access entropy rate. It invokes
 # the memory access with all supported memory sizes and measures its execution
 # time.
 #
-# The testing disables the maximum memory check to allow analyzing all
-# memory sizes.
+# Each memory size is set explicitly with --max-mem, which the library uses
+# as given, so that all memory sizes can be analyzed.
 #
 # Specifically with the deterministic memory access pattern, the measurement
 # is intended to show the access variations of the "just" the cache that
@@ -29,6 +29,8 @@
 #    which implies that by using a memory size that is larger than L1, there
 #    will always be L1 data cache-misses for accessing the bytes in the memory.
 #
+
+set -euxo pipefail
 
 . ./invoke_testing_helper.sh
 
@@ -58,7 +60,7 @@ initialization
 
 ################################################################################
 # Measure with deterministic memory access
-CFLAGS="-DJENT_TEST_MEASURE_RAW_MEMORY_ACCESS -DJENT_TESTING_MEMSIZE_NO_BOUNDSCHECK" make -s -f Makefile.hashtime
+CFLAGS="-DJENT_TEST_MEASURE_RAW_MEMORY_ACCESS" make -s -f Makefile.hashtime
 
 size=1
 while [ $size -le 20 ]

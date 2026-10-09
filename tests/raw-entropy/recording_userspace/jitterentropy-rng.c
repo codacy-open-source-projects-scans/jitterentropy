@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2019 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -17,12 +17,50 @@
  * DAMAGE.
  */
 
+#include "jitterentropy.h"
+#include "jitterentropy-internal.h"	/* the collector configuration */
+#include "jitterentropy-memlock.h"
+#include "jitterentropy-options.h"
+
+#include <errno.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "jitterentropy.h"
+#if defined(_MSC_VER) || defined(__MINGW32__)
+# include <fcntl.h>
+# include <io.h>
+#endif
+
+/*
+ * Report each health test failure of a FIPS or NTG.1 instance on stderr, as
+ * the kernel module logs them: stdout carries the random data. Intermittent
+ * failures in particular are otherwise invisible - jent_read_entropy_safe()
+ * recovers from them without returning an error - and a failed startup of a
+ * recovery shows up only as the error code of the read.
+ */
+static void jent_rng_health_failure(struct rand_data *ec,
+				    unsigned int health_failure)
+{
+	unsigned int bits = health_failure |
+			    (health_failure >> JENT_PERMANENT_FAILURE_SHIFT);
+	char uuid[JENT_UUID_STRLEN];
+
+	if (jent_entropy_collector_uuid(ec, uuid, sizeof(uuid)))
+		strcpy(uuid, "(unknown)");
+
+	fprintf(stderr, "%s health test failure 0x%x:%s%s%s%s, instance %s, reinit %u, osr %u, hashloop %u, memsize %u\n",
+		health_failure >> JENT_PERMANENT_FAILURE_SHIFT ?
+		"permanent" : "intermittent",
+		health_failure,
+		bits & JENT_RCT_FAILURE ? " RCT" : "",
+		bits & JENT_APT_FAILURE ? " APT" : "",
+		bits & JENT_LAG_FAILURE ? " lag" : "",
+		bits & JENT_RCT_MEM_FAILURE ? " RCT-mem" : "",
+		uuid, ec->reinit_count, ec->osr, ec->hashloopcnt,
+		ec->mem ? ec->memmask + 1 : 0);
+}
 
 int main(int argc, char * argv[])
 {
@@ -30,171 +68,55 @@ int main(int argc, char * argv[])
 	int ret = 0;
 	unsigned int flags = 0, osr = 0;
 	struct rand_data *ec_nostir;
-	char status[1000];
+	char status[4096];
 	int hex = 0;
 	size_t i;
 
 	if (argc < 2) {
-		printf("%s <number of measurements> [--ntg1|--force-fips|--disable-memory-access|--disable-internal-timer|--force-internal-timer|--all-caches|--osr <OSR>|--max-mem <NUM>|--hloopcnt <NUM>|--hex]\n", argv[0]);
+		fprintf(stderr, "%s <number of measurements> [" JENT_OPTIONS_USAGE "|" JENT_OPTIONS_USAGE_OSR "|--hex]\n", argv[0]);
 		return 1;
 	}
 
-	rounds = strtoull(argv[1], NULL, 10);
-	if (rounds >= ULLONG_MAX)
-		return 1;
+	{
+		char *endp;
+		const char *p = argv[1];
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+
+		/*
+		 * Reject non-numeric input instead of treating it as 0, and a
+		 * sign with it: strtoull() accepts "-5" and wraps it round to
+		 * ULLONG_MAX - 4 with errno clear, so "jitterentropy-rng -5"
+		 * ran for what amounts to forever.
+		 */
+		if (*p == '-' || *p == '+') {
+			fprintf(stderr, "Invalid rounds value %s\n", argv[1]);
+			return 1;
+		}
+
+		errno = 0;
+		rounds = strtoull(p, &endp, 10);
+		if (errno || endp == p || *endp != '\0' ||
+		    rounds >= ULLONG_MAX) {
+			fprintf(stderr, "Invalid rounds value %s\n", argv[1]);
+			return 1;
+		}
+	}
 	argc--;
 	argv++;
 
 	while (argc > 1) {
-		if (!strncmp(argv[1], "--ntg1", 6))
-			flags |= JENT_NTG1;
-		else if (!strncmp(argv[1], "--force-fips", 12))
-			flags |= JENT_FORCE_FIPS;
-		else if (!strncmp(argv[1], "--disable-memory-access", 23))
-			flags |= JENT_DISABLE_MEMORY_ACCESS;
-		else if (!strncmp(argv[1], "--disable-internal-timer", 24))
-			flags |= JENT_DISABLE_INTERNAL_TIMER;
-		else if (!strncmp(argv[1], "--force-internal-timer", 22))
-			flags |= JENT_FORCE_INTERNAL_TIMER;
-		else if (!strncmp(argv[1], "--all-caches", 12))
-			flags |= JENT_CACHE_ALL;
-		else if (!strncmp(argv[1], "--osr", 5)) {
-			unsigned long val;
+		int ret_opt = jent_parse_option(&argc, &argv, &flags, &osr);
 
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("OSR value missing\n");
-				return 1;
-			}
-
-			val = strtoul(argv[1], NULL, 10);
-			if (val >= UINT_MAX)
-				return 1;
-			osr = (unsigned int)val;
-		} else if (!strncmp(argv[1], "--max-mem", 9)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("Maximum memory value missing\n");
-				return 1;
-			}
-
-			val = strtoul(argv[1], NULL, 10);
-			switch (val) {
-			case 0:
-				/* Allow to set no option */
-				break;
-			case 1:
-				flags |= JENT_MAX_MEMSIZE_1kB;
-				break;
-			case 2:
-				flags |= JENT_MAX_MEMSIZE_2kB;
-				break;
-			case 3:
-				flags |= JENT_MAX_MEMSIZE_4kB;
-				break;
-			case 4:
-				flags |= JENT_MAX_MEMSIZE_8kB;
-				break;
-			case 5:
-				flags |= JENT_MAX_MEMSIZE_16kB;
-				break;
-			case 6:
-				flags |= JENT_MAX_MEMSIZE_32kB;
-				break;
-			case 7:
-				flags |= JENT_MAX_MEMSIZE_64kB;
-				break;
-			case 8:
-				flags |= JENT_MAX_MEMSIZE_128kB;
-				break;
-			case 9:
-				flags |= JENT_MAX_MEMSIZE_256kB;
-				break;
-			case 10:
-				flags |= JENT_MAX_MEMSIZE_512kB;
-				break;
-			case 11:
-				flags |= JENT_MAX_MEMSIZE_1MB;
-				break;
-			case 12:
-				flags |= JENT_MAX_MEMSIZE_2MB;
-				break;
-			case 13:
-				flags |= JENT_MAX_MEMSIZE_4MB;
-				break;
-			case 14:
-				flags |= JENT_MAX_MEMSIZE_8MB;
-				break;
-			case 15:
-				flags |= JENT_MAX_MEMSIZE_16MB;
-				break;
-			case 16:
-				flags |= JENT_MAX_MEMSIZE_32MB;
-				break;
-			case 17:
-				flags |= JENT_MAX_MEMSIZE_64MB;
-				break;
-			case 18:
-				flags |= JENT_MAX_MEMSIZE_128MB;
-				break;
-			case 19:
-				flags |= JENT_MAX_MEMSIZE_256MB;
-				break;
-			case 20:
-				flags |= JENT_MAX_MEMSIZE_512MB;
-				break;
-			default:
-				printf("Unknown maximum memory value\n");
-				return 1;
-			}
-		} else if (!strncmp(argv[1], "--hloopcnt", 10)) {
-			unsigned long val;
-
-			argc--;
-			argv++;
-			if (argc <= 1) {
-				printf("Hash loop count value missing\n");
-				return 1;
-			}
-
-			val = strtoul(argv[1], NULL, 10);
-			switch (val) {
-			case 0:
-				flags |= JENT_HASHLOOP_1;
-				break;
-			case 1:
-				flags |= JENT_HASHLOOP_2;
-				break;
-			case 2:
-				flags |= JENT_HASHLOOP_4;
-				break;
-			case 3:
-				flags |= JENT_HASHLOOP_8;
-				break;
-			case 4:
-				flags |= JENT_HASHLOOP_16;
-				break;
-			case 5:
-				flags |= JENT_HASHLOOP_32;
-				break;
-			case 6:
-				flags |= JENT_HASHLOOP_64;
-				break;
-			case 7:
-				flags |= JENT_HASHLOOP_128;
-				break;
-			default:
-				printf("Unknown hashloop value\n");
-				return 1;
-			}
+		if (ret_opt < 0)
+			return 1;
+		if (ret_opt > 0) {
+			/* One of the options all tools share. */
 		} else if (!strncmp(argv[1], "--hex", 5)) {
 			hex = 1;
 		} else {
-			printf("Unknown option %s\n", argv[1]);
+			fprintf(stderr, "Unknown option %s\n", argv[1]);
 			return 1;
 		}
 
@@ -202,41 +124,117 @@ int main(int argc, char * argv[])
 		argv++;
 	}
 
+	/*
+	 * The compliance modes require the collector memory to be locked into
+	 * RAM, which the operating system permits only within a per-process
+	 * limit. See jitterentropy-memlock.h.
+	 */
+	if (jent_raise_memlock_limit(flags))
+		fprintf(stderr,
+			"Cannot raise the memory lock limit, allocating the entropy collector may fail\n");
+
+	/*
+	 * Likewise the secure memory arena of the external crypto backends,
+	 * which is created once for the process and is what the library
+	 * allocates the collector from. See jitterentropy-memlock.h.
+	 *
+	 * Both precede jent_entropy_init_ex(): the initialization creates a
+	 * collector of its own, with the very same flags, so it allocates from
+	 * the arena and locks its memory just like the instance below.
+	 */
+	if (jent_init_secure_memory(flags))
+		fprintf(stderr,
+			"Cannot create the secure memory arena, allocating the entropy collector will fail\n");
+
+	/* Before jent_entropy_init_ex(): the library refuses it afterwards. */
+	ret = jent_set_fips_failure_callback(jent_rng_health_failure);
+	if (ret) {
+		fprintf(stderr, "Cannot register the health failure callback: %d\n",
+			ret);
+		return 1;
+	}
+
 	ret = jent_entropy_init_ex(osr, flags);
 	if (ret) {
-		printf("The initialization failed with error code %d\n", ret);
+		fprintf(stderr, "The initialization failed with error code %d\n",
+			ret);
 		return ret;
 	}
 
 	ec_nostir = jent_entropy_collector_alloc(osr, flags);
 	if (!ec_nostir) {
-		printf("Jitter RNG handle cannot be allocated\n");
+		fprintf(stderr, "Jitter RNG handle cannot be allocated\n");
 		return 1;
 	}
 
 	if (jent_status(ec_nostir, status, sizeof(status))) {
-		printf("Cannot obtain status information\n");
+		fprintf(stderr, "Cannot obtain status information\n");
 		ret = 1;
 		goto out;
 	}
 
 	fprintf(stderr, "%s", status);
 
+	/*
+	 * Windows opens stdout in text mode: every 0x0A byte of the random
+	 * stream would be written out as 0x0D 0x0A, corrupting and inflating
+	 * the data as soon as it is redirected into a file or a pipe - which
+	 * is the only way this tool is used. The hex encoding below emits no
+	 * 0x0A at all and is therefore left alone.
+	 */
+#if defined(_MSC_VER) || defined(__MINGW32__)
+	if (!hex && _setmode(_fileno(stdout), _O_BINARY) == -1) {
+		fprintf(stderr, "Cannot switch stdout to binary mode\n");
+		ret = 1;
+		goto out;
+	}
+#endif
+
 	for (size = 0; size < rounds; size++) {
 		uint8_t tmp[32];
 
-		if (0 > jent_read_entropy_safe(&ec_nostir, (char*)tmp, sizeof(tmp))) {
-			fprintf(stderr, "FIPS 140-3 health test failed\n");
+		ssize_t rc = jent_read_entropy_safe(&ec_nostir, (char *)tmp,
+						    sizeof(tmp));
+
+		if (rc < 0) {
+			fprintf(stderr, "Reading random data failed with error code %zd\n",
+				rc);
 			ret = 1;
 			goto out;
 		}
+		/*
+		 * Treat output errors as fatal: consumers pipe this data into
+		 * files for analysis, and a silently truncated stream with
+		 * exit code 0 would be processed as if complete.
+		 */
 		if (hex) {
 			for (i = 0; i < sizeof(tmp); ++i) {
-				fprintf(stdout, "%02X", (unsigned int)tmp[i]);
+				if (fprintf(stdout, "%02X",
+					    (unsigned int)tmp[i]) < 0) {
+					fprintf(stderr, "Can't output data\n");
+					ret = 1;
+					goto out;
+				}
 			}
 		} else {
-			fwrite(&tmp, sizeof(tmp), 1, stdout);
+			if (fwrite(&tmp, sizeof(tmp), 1, stdout) != 1) {
+				fprintf(stderr, "Can't output data\n");
+				ret = 1;
+				goto out;
+			}
 		}
+	}
+
+	/*
+	 * Most of the output above only fills the stdio buffer; the final
+	 * chunk would be flushed inside exit(), where a write failure (e.g.
+	 * ENOSPC) is silently discarded. Flush explicitly so a truncated
+	 * stream cannot terminate with exit code 0.
+	 */
+	if (fflush(stdout) != 0) {
+		fprintf(stderr, "Can't output data\n");
+		ret = 1;
+		goto out;
 	}
 
 	ret = 0;

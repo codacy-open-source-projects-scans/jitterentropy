@@ -1,7 +1,7 @@
 /* Jitter RNG: GCD health test
  *
- * Copyright (C) 2021 - 2025, Joshua E. Hill <josh@keypair.us>
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Joshua E. Hill <josh@keypair.us>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -22,12 +22,27 @@
 #include "jitterentropy-gcd.h"
 #include "jitterentropy-internal.h"
 
-/* The common divisor for all timestamp deltas */
-static uint64_t jent_common_timer_gcd = 0;
+/*
+ * The common divisor for all timestamp deltas - one per clock, not one per
+ * process. The granularities are unrelated (a platform clock may step by 1000,
+ * the counting thread counts by one), and dividing by the other clock's is a
+ * lost measurement: too large truncates the jitter away, too small leaves the
+ * deltas un-normalized.
+ *
+ * 32 bits (see the bound in jent_gcd_verdict()) for atomic access, zero is not
+ * established.
+ */
+static uint32_t jent_common_timer_gcd[JENT_GCD_CLOCKS] = { 0 };
 
-static inline int jent_gcd_tested(void)
+/* Takes enable_notime as it stands, so that no call site has to translate. */
+static inline unsigned int jent_gcd_clock(unsigned int notime)
 {
-	return (jent_common_timer_gcd != 0);
+	return notime ? JENT_GCD_CLOCK_NOTIME : JENT_GCD_CLOCK_PLATFORM;
+}
+
+static inline int jent_gcd_tested(unsigned int clock)
+{
+	return !!jent_atomic_load_u32(&jent_common_timer_gcd[clock]);
 }
 
 /* A straight forward implementation of the Euclidean algorithm for GCD. */
@@ -45,7 +60,7 @@ static inline uint64_t jent_gcd64(uint64_t a, uint64_t b)
 	while (b != 0) {
 		uint64_t r;
 
-		r = a % b;
+		r = jent_umod64(a, b);
 
 		a = b;
 		b = r;
@@ -61,7 +76,7 @@ static int jent_gcd_analyze_internal(uint64_t *delta_history, size_t nelem,
 	uint64_t running_gcd, delta_sum = 0;
 	size_t i;
 
-	if (!delta_history)
+	if (!delta_history || !nelem)
 		return -EAGAIN;
 
 	running_gcd = delta_history[0];
@@ -96,14 +111,20 @@ static int jent_gcd_analyze_internal(uint64_t *delta_history, size_t nelem,
 	return 0;
 }
 
-int jent_gcd_analyze(uint64_t *delta_history, size_t nelem, size_t osr)
+int jent_gcd_verdict(uint64_t *delta_history, size_t nelem, size_t osr,
+		     uint64_t *gcd)
 {
 	uint64_t running_gcd, delta_sum;
 	int ret = jent_gcd_analyze_internal(delta_history, nelem, &running_gcd,
 					    &delta_sum);
 
+	/* No delta recorded: every reading went backwards. */
 	if (ret == -EAGAIN)
-		return 0;
+		return ENOMONOTONIC;
+
+	/* Count in units of the GCD, independent of a stored divisor. */
+	if (running_gcd)
+		delta_sum = jent_udiv64(delta_sum, running_gcd);
 
 	/*
 	 * We assume 1/osr bits of entropy per sample. On average, variations
@@ -122,19 +143,54 @@ int jent_gcd_analyze(uint64_t *delta_history, size_t nelem, size_t osr)
 		goto out;
 	}
 
-	/*  Adjust all deltas by the observed (small) common factor. */
-	if (!jent_gcd_tested())
-		jent_common_timer_gcd = running_gcd;
+	*gcd = running_gcd;
 
 out:
 	return ret;
 }
 
-uint64_t *jent_gcd_init(size_t nelem)
+void jent_gcd_store(uint64_t gcd, unsigned int notime)
+{
+	unsigned int clock = jent_gcd_clock(notime);
+
+	/*
+	 * Adjust all deltas by the observed (small) common factor. The first
+	 * startup on the clock sets it, and it is fixed from then on: startups
+	 * racing on the same clock each measure one, and a later store would
+	 * change the divisor under the collectors already dividing by the
+	 * first - a compare-and-swap against the unset 0, not a check and a
+	 * store.
+	 *
+	 * A zero divisor is not established, zero being the unset value: a
+	 * collector divides by what jent_gcd_get() gives it, and the "not
+	 * established yet" answer has one measuring the clock divide by one and
+	 * refuses any other. It takes an all-zero delta history to arrive here
+	 * with one, which the variation check of jent_gcd_verdict() rejects
+	 * before this is called - the guard states the invariant rather than
+	 * covering a reachable case.
+	 */
+	if (gcd)
+		(void)jent_atomic_cmpxchg_u32(&jent_common_timer_gcd[clock], 0,
+					      (uint32_t)gcd);
+}
+
+int jent_gcd_analyze(uint64_t *delta_history, size_t nelem, size_t osr,
+		     unsigned int notime)
+{
+	uint64_t gcd;
+	int ret = jent_gcd_verdict(delta_history, nelem, osr, &gcd);
+
+	if (!ret)
+		jent_gcd_store(gcd, notime);
+
+	return ret;
+}
+
+uint64_t *jent_gcd_init(size_t nelem, unsigned int flags)
 {
 	uint64_t *delta_history;
 
-	delta_history = jent_zalloc(nelem * sizeof(uint64_t));
+	delta_history = jent_zalloc(nelem * sizeof(uint64_t), flags);
 	if (!delta_history)
 		return NULL;
 
@@ -147,20 +203,22 @@ void jent_gcd_fini(uint64_t *delta_history, size_t nelem)
 		jent_zfree(delta_history, nelem * sizeof(uint64_t));
 }
 
-int jent_gcd_get(uint64_t *value)
+int jent_gcd_get(uint64_t *value, unsigned int notime)
 {
-	if (!jent_gcd_tested())
+	unsigned int clock = jent_gcd_clock(notime);
+
+	if (!jent_gcd_tested(clock))
 		return 1;
 
-	*value = jent_common_timer_gcd;
+	*value = jent_atomic_load_u32(&jent_common_timer_gcd[clock]);
 	return 0;
 }
 
-int jent_gcd_selftest(void)
+int jent_gcd_selftest(unsigned int flags)
 {
 #define JENT_GCD_SELFTEST_ELEM 10
 #define JENT_GCD_SELFTEST_EXP 3ULL
-	uint64_t *gcd = jent_gcd_init(JENT_GCD_SELFTEST_ELEM);
+	uint64_t *gcd = jent_gcd_init(JENT_GCD_SELFTEST_ELEM, flags);
 	uint64_t running_gcd, delta_sum;
 	unsigned int i;
 	int ret = EGCD;

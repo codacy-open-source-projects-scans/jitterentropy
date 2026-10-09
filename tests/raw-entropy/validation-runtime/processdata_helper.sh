@@ -1,8 +1,12 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Process the entropy data
 
-if [ -z "$NONIID_DATA" ]
+# The extraction and analysis tools are invoked in pipelines with tee for
+# logging; without pipefail their failures would be masked by tee's exit code.
+set -euxo pipefail
+
+if [ -z "${NONIID_DATA:-}" ]
 then
 	echo "This script cannot be called by itself."
 	exit 1
@@ -27,30 +31,30 @@ EATOOL_NONIID=${EATOOL_NONIID:-"../../SP800-90B_EntropyAssessment/cpp/ea_non_iid
 # specify if you want to compile the extractlsb program in this script
 BUILD_EXTRACT=${BUILD_EXTRACT:-"yes"}
 
-# specify the list of significant bits and length that you want to analize. 
-# Indicate first the mask in hexa format and then the number of 
-# bits separated by a colon. 
-# The tool generates one set of var and single data files, and the EA results 
-# for each element. 
-# The mask can have a maximum of 8 bits on, the EA tool only manages samples 
+# specify the list of significant bits and length that you want to analize.
+# Indicate first the mask in hexa format and then the number of
+# bits separated by a colon.
+# The tool generates one set of var and single data files, and the EA results
+# for each element.
+# The mask can have a maximum of 8 bits on, the EA tool only manages samples
 # up to one byte.
 
-# List of masks usually analyzed (4 and 8 LSB) 
+# List of masks usually analyzed (4 and 8 LSB)
 MASK_LIST="FF:8"
 #MASK_LIST="0F:4 FF:8"
 
 # List used for ARM Cortext A9 and A7 processors
 #MASK_LIST="FF:4,8 7F8:4,8"
 
-# Maximum number of entries to be extracted from the original file
-MAX_EVENTS=1000000
+# Maximum number of entries to be extracted from the original file; no more
+# than were recorded, as extractlsb fails on a shorter file
+MAX_EVENTS=${MAX_EVENTS:-1000000}
 
 ############################################################
 # Code only after this line -- do not change               #
 ############################################################
 
 EXTRACT=${EXTRACT:-"./extractlsb"}
-CFILE="extractlsb.c"
 
 if [ ! -d $ENTROPYDATA_DIR ]
 then
@@ -60,17 +64,16 @@ fi
 
 if [ ! -d $RESULTS_DIR ]
 then
-	mkdir $RESULTS_DIR
-	if [ $? -ne 0 ]
+	if ! mkdir $RESULTS_DIR
 	then
 		echo "ERROR: Directory with raw entropy data $RESULTS_DIR could not be created"
 		exit 1
 	fi
 fi
 
-if [ ! -f $EA_TOOL ]
+if [ ! -f "$EATOOL_NONIID" ]
 then
-	echo "ERROR: Path of Entropy Data tool $EA_TOOL is missing"
+	echo "ERROR: Path of Entropy Data tool $EATOOL_NONIID is missing"
 	exit 1
 fi
 
@@ -89,7 +92,7 @@ else
 	make
 fi
 
-if [ ! -x $EXTRACT ] 
+if [ ! -x $EXTRACT ]
 then
 	echo "ERROR: Cannot execute $EXTRACT program"
 	exit 1
@@ -106,7 +109,11 @@ do
 		mask=${item%:*}
 		bits=${item#*:}
 
-		$EXTRACT $file $filepath.${mask}bitout.data $MAX_EVENTS $mask 2>&1 | tee -a $LOGFILE
+		if ! $EXTRACT $file $filepath.${mask}bitout.data $MAX_EVENTS $mask 2>&1 | tee -a $LOGFILE
+		then
+			echo "ERROR: Extraction of $file (mask $mask) failed" | tee -a $LOGFILE
+			exit 1
+		fi
 
 	done
 done
@@ -114,7 +121,7 @@ done
 echo "" | tee -a $LOGFILE
 echo "Extraction finished. Now analyzing entropy for noise source ..." | tee -a $LOGFILE
 echo "" | tee -a $LOGFILE
- 
+
 for file in $NONIID_DATA
 do
 	file="$ENTROPYDATA_DIR/$file"
@@ -129,14 +136,21 @@ do
 		infile=$filepath.${mask}bitout.data
 
 		for bits in $bits_list
-		do	
+		do
 			outfile=${filepath}.minentropy_${mask}_${bits}bits.txt
 			inprocess_file=$outfile
 			if [ ! -f $outfile ]
 			then
 				echo "Analyzing entropy for $infile ${bits}-bit" | tee -a $LOGFILE
 				#python -u $EATOOL_NONIID -v $infilesingle $bits > $outfile
-				$EATOOL_NONIID -i -a -v $infile ${bits} > $outfile
+				if ! $EATOOL_NONIID -i -a -v $infile ${bits} > $outfile
+				then
+					echo "ERROR: Entropy analysis of $infile (${bits} bits) failed" | tee -a $LOGFILE
+					# do not leave a partial result behind that
+					# would be skipped as complete on a re-run
+					rm -f $outfile
+					exit 1
+				fi
 			else
 				echo "File $outfile already generated"
 			fi

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 - 2025, Stephan Mueller <smueller@chronox.de>
+ * Copyright (C) 2021 - 2026, Stephan Mueller <smueller@chronox.de>
  *
  * License: see LICENSE file in root directory
  *
@@ -16,6 +16,10 @@
  * USE OF THIS SOFTWARE, EVEN IF NOT ADVISED OF THE POSSIBILITY OF SUCH
  * DAMAGE.
  */
+
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
 
 #include <stdio.h>
 #include <stdint.h>
@@ -42,7 +46,7 @@
 #define EXP_GCD 50ULL
 int main(int argc, char *argv[])
 {
-	uint64_t *gcd = jent_gcd_init(ELEM);
+	uint64_t *gcd = jent_gcd_init(ELEM, 0);
 	uint64_t val;
 	unsigned int i;
 
@@ -54,15 +58,20 @@ int main(int argc, char *argv[])
 	(void)argc;
 	(void)argv;
 
+	if (!gcd)
+		return 4;
+
 	for (i = 0; i < ELEM; i++)
 		jent_gcd_add_value(gcd, i * EXP_GCD, i);
 
-	if (jent_gcd_analyze(gcd, ELEM, osr))
+	if (jent_gcd_analyze(gcd, ELEM, osr, JENT_GCD_CLOCK_PLATFORM)) {
+		jent_gcd_fini(gcd, ELEM);
 		return 1;
+	}
 
 	jent_gcd_fini(gcd, ELEM);
 
-	if (jent_gcd_get(&val))
+	if (jent_gcd_get(&val, JENT_GCD_CLOCK_PLATFORM))
 		return 2;
 
 	if (val != EXP_GCD)

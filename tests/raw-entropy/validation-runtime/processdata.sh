@@ -1,13 +1,17 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Process the entropy data
+
+set -euxo pipefail
 
 ############################################################
 # Configuration values                                     #
 ############################################################
 
-ENTROPYDATA_DIR=$1
-RESULTS_DIR=$2
+# The first and second argument, or the environment; processdata_helper.sh
+# supplies the defaults.
+ENTROPYDATA_DIR=${1:-${ENTROPYDATA_DIR:-}}
+RESULTS_DIR=${2:-${RESULTS_DIR:-}}
 
 if [ -n "$RESULTS_DIR" ]
 then

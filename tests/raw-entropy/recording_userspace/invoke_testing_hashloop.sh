@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # This test is intended to analyze the hash lopp entropy rate. It invokes
 # the hash operation with all supported hash loop iterations and measures its
@@ -7,6 +7,8 @@
 # By providing the measurement of the hash loop iteration behavior, the impact
 # of the iteration count on the entropy rate can be analyzed.
 #
+
+set -euxo pipefail
 
 . ./invoke_testing_helper.sh
 
